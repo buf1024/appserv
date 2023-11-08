@@ -1,0 +1,9 @@
+activate_link = "127.0.0.1:3000/user/activate"
+avatar_path = "avatar"
+clear_interval = 60
+db_url = "sqlite://userserv.db"
+listen = "127.0.0.1:4000"
+smtp_host = "smtp.163.com"
+smtp_passwd = "PQHGCAXUAAGMMLCE"
+smtp_sender = "toyent@163.com"
+upload_path = "upload"
