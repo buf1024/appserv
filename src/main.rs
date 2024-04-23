@@ -1,9 +1,9 @@
 use std::time::Duration;
 
-use tokio::signal;
+use appserv::{app_router::app_router, app_state::AppState, config::CONFIG};
+use tokio::{net::TcpListener, signal};
 use tracing::{debug, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-use userserv::{app_router::app_router, app_state::AppState, CONFIG};
 
 #[tokio::main]
 async fn main() {
@@ -39,8 +39,8 @@ async fn main() {
 
     debug!("debug..");
     info!("listening {} ...", &CONFIG.listen);
-    axum::Server::bind(&CONFIG.listen.parse().unwrap())
-        .serve(app.into_make_service())
+    let listener = TcpListener::bind(&CONFIG.listen).await.unwrap();
+    axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();

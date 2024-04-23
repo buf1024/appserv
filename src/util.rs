@@ -3,7 +3,7 @@ use lettre::{
     SmtpTransport, Transport,
 };
 
-use crate::{errors::Error, Result, CONFIG};
+use crate::{config::CONFIG, errors::Error, Result};
 
 pub fn send_email(receiver: String, subject: String, body: String) -> Result {
     if CONFIG.smtp_host.is_none() || CONFIG.smtp_passwd.is_none() || CONFIG.smtp_sender.is_none() {
@@ -46,3 +46,4 @@ pub fn send_email(receiver: String, subject: String, body: String) -> Result {
         }
     }
 }
+

@@ -8,21 +8,33 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use axum_extra::{headers, TypedHeader};
 use captcha::{by_name, CaptchaName, Difficulty};
 use rand::{thread_rng, Rng};
 
 use crate::{
     app_state::AppState,
-    errors::{Error, ERR_SUCCESS},
-    proto::CaptchaResp,
+    errors::{Error, E_SUCCESS},
+    proto::CaptchaRsp,
     Result,
 };
 
 use super::COOKIE_NAME;
 
 #[debug_handler(state = AppState)]
-pub async fn captcha(State(state): State<AppState>) -> Result<impl IntoResponse> {
-    let (captcha_id, captcha, chars) = {
+pub async fn captcha(
+    State(state): State<AppState>,
+    TypedHeader(cookies): TypedHeader<headers::Cookie>,
+) -> Result<impl IntoResponse> {
+    {
+        if let Some(cookie) = cookies.get(COOKIE_NAME) {
+            if let Ok(Some(session)) = state.store.load_session(cookie.to_string()).await {
+                let _ = state.store.destroy_session(session).await;
+            }
+        }
+    }
+
+    let (captcha, chars) = {
         let mut rng = thread_rng();
         let difficulty = rng.gen_range(0..3);
         let difficulty = match difficulty {
@@ -40,7 +52,6 @@ pub async fn captcha(State(state): State<AppState>) -> Result<impl IntoResponse>
             _ => unreachable!(),
         };
 
-        let captcha_id = nanoid::nanoid!();
         let captcha = by_name(difficulty, name);
         let chars = captcha.chars_as_string();
         tracing::info!("captcha: {}", &chars);
@@ -48,13 +59,13 @@ pub async fn captcha(State(state): State<AppState>) -> Result<impl IntoResponse>
             .as_base64()
             .ok_or(Error::Custom(String::from("fail to generate captcha")))?;
 
-        (captcha_id, captcha, chars)
+        (captcha, chars)
     };
 
     let mut session = Session::new();
     session.expire_in(Duration::from_secs(60 * 5));
     session
-        .insert(&captcha_id, chars)
+        .insert("captcha", chars)
         .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
 
     let cookie = state
@@ -64,9 +75,8 @@ pub async fn captcha(State(state): State<AppState>) -> Result<impl IntoResponse>
         .map_err(|e| Error::Custom(format!("store session error: {}", e)))?
         .ok_or(Error::Custom(format!("store session error")))?;
 
-    let resp = CaptchaResp {
-        error: ERR_SUCCESS,
-        captcha_id,
+    let resp = CaptchaRsp {
+        error: E_SUCCESS,
         captcha,
     };
 

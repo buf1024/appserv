@@ -7,15 +7,15 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug executable 'userserv'",
+            "name": "Debug executable 'appserv'",
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=userserv",
-                    "--package=userserv"
+                    "--bin=appserv",
+                    "--package=appserv"
                 ],
                 "filter": {
-                    "name": "userserv",
+                    "name": "appserv",
                     "kind": "bin"
                 }
             },

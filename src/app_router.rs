@@ -2,7 +2,8 @@ use std::time::{Duration, Instant};
 
 use axum::{
     error_handling::HandleErrorLayer,
-    http::{Request, StatusCode},
+    extract::Request,
+    http::StatusCode,
     middleware::{self, Next},
     response::IntoResponse,
     routing::{get, post},
@@ -17,24 +18,43 @@ use tracing::Level;
 
 use crate::{
     app_state::AppState,
-    handler::{activate, captcha, is_signin, signin, signup, user_info, user_products, signout},
+    handler::{captcha, send_email_code, signin, signup, products},
 };
 
 pub fn app_router(state: AppState) -> Router {
-    let router = Router::new()
-        .route("/signup", post(signup))
+    // user
+    // hiqradio
+    // let router = Router::new()
+    //     .route("/signup", post(signup))
+    //     .route("/captcha", get(captcha))
+    //     .route("/activate", get(activate))
+    //     .route("/signin", post(signin))
+    //     .route("/is_signin", post(is_signin))
+    //     .route("/products", post(signup))
+    //     .route("/signout", post(signout))
+    //     .route("/user/info", post(user_info))
+    //     .route("/user/products", post(user_products).get(user_products))
+    //     .route("/user/subscribe", get(captcha));
+
+    // common
+    let router_common = Router::new()
         .route("/captcha", get(captcha))
-        .route("/activate", get(activate))
+        .route("/verify_email", post(send_email_code));
+
+    let router_common = Router::new().nest("/common", router_common);
+
+    // user
+    let router_user = Router::new()
+        .route("/signup", post(signup))
         .route("/signin", post(signin))
-        .route("/is_signin", post(is_signin))
-        .route("/products", post(signup))
-        .route("/signout", post(signout))
-        .route("/user/info", post(user_info))
-        .route("/user/products", post(user_products).get(user_products))
-        .route("/user/subscribe", get(captcha));
+        .route("/products", post(products));
+
+    let router_user = Router::new().nest("/user", router_user);
+
 
     Router::new()
-        .nest("/api", router)
+        .nest("/api", router_common)
+        .nest("/api", router_user)
         .layer(
             ServiceBuilder::new()
                 .layer(HandleErrorLayer::new(|_: BoxError| async {
@@ -51,7 +71,7 @@ pub fn app_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn track_request<B>(req: Request<B>, next: Next<B>) -> impl IntoResponse {
+async fn track_request(req: Request, next: Next) -> impl IntoResponse {
     let start = Instant::now();
     // let path = if let Some(matched_path) = req.extensions().get::<MatchedPath>() {
     //     matched_path.as_str().to_owned()
@@ -59,7 +79,6 @@ async fn track_request<B>(req: Request<B>, next: Next<B>) -> impl IntoResponse {
     //     req.uri().path().to_owned()
     // };
     // let method = req.method().clone();
-
     let response = next.run(req).await;
 
     let latency = start.elapsed().as_secs_f64();

@@ -2,14 +2,13 @@ use async_session::MemoryStore;
 use axum::extract::FromRef;
 
 use crate::{
-    repo::{self, DynUserServRepo},
-    Result, CONFIG,
+    config::CONFIG, repo::{self, DynAppServRepo}, Result
 };
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: MemoryStore,
-    pub repo: DynUserServRepo,
+    pub repo: DynAppServRepo,
 }
 
 impl AppState {

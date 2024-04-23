@@ -1,9 +1,10 @@
 use async_session::SessionStore;
-use axum::{debug_handler, extract::State, headers::Cookie, Json, TypedHeader};
+use axum::{debug_handler, extract::State, Json};
+use axum_extra::{headers::Cookie, TypedHeader};
 
 use crate::{
     app_state::AppState,
-    errors::{Error, ERR_SUCCESS, ERR_USER_NOT_LOGIN},
+    errors::{Error, E_SUCCESS, E_USER_NOT_LOGIN},
     handler::COOKIE_NAME,
     model::user::User,
     proto::SignOutResp,
@@ -41,12 +42,12 @@ pub async fn signout(
 
     let resp = if is_login {
         SignOutResp {
-            error: ERR_SUCCESS,
+            error: E_SUCCESS,
             message: "success".to_string(),
         }
     } else {
         SignOutResp {
-            error: ERR_USER_NOT_LOGIN,
+            error: E_USER_NOT_LOGIN,
             message: "user not login".to_string(),
         }
     };

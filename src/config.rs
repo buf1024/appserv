@@ -1,15 +1,20 @@
 use std::{fs, path::Path};
 
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
+
+pub static CONFIG: Lazy<Config> = Lazy::new(Config::load_config);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    pub avatar_path: String,
+    pub jwt_key: String,
+    pub jwt_exp: i64,
+    pub jwt_refresh: i64,
     pub db_url: String,
     pub listen: String,
-    pub avatar_path: String,
-    pub upload_path: String,
     pub clear_interval: usize,
-    pub activate_link: String,
+    pub session_interval: usize,
     pub smtp_sender: Option<String>,
     pub smtp_host: Option<String>,
     pub smtp_passwd: Option<String>,
@@ -18,15 +23,17 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            db_url: String::from("sqlite://userserv.db"),
+            db_url: String::from("sqlite://appserv.db"),
             listen: String::from("127.0.0.1:3000"),
-            avatar_path: String::from("avatar"),
-            upload_path: String::from("upload"),
-            activate_link: String::from("127.0.0.1:3000"),
             clear_interval: 60,
             smtp_sender: None,
             smtp_host: None,
             smtp_passwd: None,
+            session_interval: 60 * 5,
+            avatar_path: String::from("./avatar"),
+            jwt_key: String::from("aa5f704d9a0eccde71070d8697a8c1ff"), // 123abc
+            jwt_exp: 1296000, // 15天过期
+            jwt_refresh: 3600, // 1小时
         }
     }
 }
@@ -55,7 +62,7 @@ impl Config {
         };
 
         check_path(&cfg.avatar_path);
-        check_path(&cfg.upload_path);
+        // check_path(&cfg.upload_path);
 
         cfg
     }
