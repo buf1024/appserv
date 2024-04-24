@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 mod user;
 pub use user::*;
 
+mod hiqradio;
+pub use hiqradio::*;
+
 
 #[derive(Debug, Serialize)]
 pub struct BaseRsp {

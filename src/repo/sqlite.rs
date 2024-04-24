@@ -5,11 +5,16 @@ use ring::digest::{Context, SHA256};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
 
 use crate::{
+    config::CONFIG,
     errors::Error,
     model::{
-        product::Product, product_user::{ProductUser, USER_PRODUCT_STATUS_NORMAL}, user::{User, USER_STATUS_NORMAL}
+        hiqradio::{FavGroup, Favorite, Recently, StationGroup},
+        product::Product,
+        session::Session,
+        user::{User, USER_STATUS_NORMAL},
+        user_product::UserProduct,
     },
-    proto::{SignInReq, SignUpReq},
+    proto::{GroupNew, RecentlyNew, SignInReq, SignUpReq},
     Result,
 };
 
@@ -61,10 +66,8 @@ impl AppServRepo for SqliteRepo {
         .bind(&signup.email)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| {
-            tracing::error!("query user error: {}", e);
-            Error::DatabaseException
-        })? {
+        .map_err(|e| Error::DatabaseException(e.to_string()))?
+        {
             return Err(Error::UserExists(format!(
                 "email \"{}\" exists",
                 &user.email
@@ -73,21 +76,19 @@ impl AppServRepo for SqliteRepo {
 
         let product = sqlx::query_as::<_, Product>(
             r#"select id, product, desc, status, update_time
-            from user where product = ?"#,
+            from product where product = ?"#,
         )
         .bind(&signup.product)
         .fetch_optional(&self.pool)
         .await
-        .map_err(|e| {
-            tracing::error!("query product error: {}", e);
-            Error::DatabaseException
-        })?
+        .map_err(|e| Error::DatabaseException(e.to_string()))?
         .ok_or(Error::ProductNotExists)?;
 
-        let mut txn = self.pool.begin().await.map_err(|e| {
-            tracing::error!("start transaction error: {}", e);
-            Error::DatabaseException
-        })?;
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
         let passwd = {
             let mut context = Context::new(&SHA256);
             let mut data = String::new();
@@ -99,18 +100,21 @@ impl AppServRepo for SqliteRepo {
         };
         let user = self.user_from_signup(signup, passwd);
 
-        sqlx::query(
-            "insert into user(`user_name`, `email`, `passwd`, `status`, `update_time`) values (?, ?, ?, ?, ?)",
+        if let Err(e) = sqlx::query(
+            "insert into user(user_name, email, passwd, status, update_time) values (?, ?, ?, ?, ?)",
         )
         .bind(&user.user_name)
         .bind(&user.email)
         .bind(user.passwd)
         .bind(user.status)
         .bind(user.update_time)
-        .execute(&mut *txn).await.map_err(|e| {
-            tracing::error!("insert user error: {}", e);
-            Error::DatabaseException
-        })?;
+        .execute(&mut *txn)
+        .await{
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
 
         let user = sqlx::query_as::<_, User>(
             r#"select id, user_name, email, passwd, status, update_time
@@ -118,32 +122,36 @@ impl AppServRepo for SqliteRepo {
         )
         .bind(&user.email)
         .fetch_one(&mut *txn)
-        .await
-        .map_err(|e| {
-            tracing::error!(?e);
-            Error::DatabaseException
-        })?;
+        .await;
+        if let Err(e) = &user {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+        let user = user.unwrap();
 
-        sqlx::query(
-            "insert into user_product(`user_id`, `product_id`, `status`, unixepoch(current_timestamp)) values (?, ?, ?)",
+        if let Err(e) = sqlx::query(
+            "insert into user_product(user_id, product_id, status, update_time) values (?, ?, '00', unixepoch(current_timestamp))",
         )
         .bind(user.id.unwrap())
         .bind(product.id.unwrap())
-        .bind(USER_PRODUCT_STATUS_NORMAL)
-        .execute(&mut *txn).await.map_err(|e| {
-            tracing::error!("insert user_product error: {}", e);
-            Error::DatabaseException
-        })?;
+        .execute(&mut *txn)
+        .await{
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
 
-        txn.commit().await.map_err(|e| {
-            tracing::error!("create user commit error: {}", e);
-            Error::DatabaseException
-        })?;
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
 
         Ok(user)
     }
 
-    async fn signin_user(&self, signin: &SignInReq) -> Result<(User, Product)> {
+    async fn signin_user(&self, signin: &SignInReq) -> Result<(User, Product, Session)> {
         let user = sqlx::query_as::<_, User>(
             r#"select id, user_name, email, passwd, status, update_time
             from user where email = ?"#,
@@ -169,7 +177,7 @@ impl AppServRepo for SqliteRepo {
             return Err(Error::UserPasswdError);
         }
 
-        let products = self.query_products(user.id.unwrap()).await?;
+        let products = self.query_user_products(user.id.unwrap()).await?;
 
         let open_products: Vec<_> = products
             .into_iter()
@@ -177,14 +185,205 @@ impl AppServRepo for SqliteRepo {
             .collect();
 
         if open_products.is_empty() {
-            return Err(Error::ProductNotOpen);
+            if signin.product_open_flag {
+                let mut txn = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+                let product = sqlx::query_as::<_, Product>(
+                    r#"select id, product, desc, status, update_time
+                    from product 
+                    where status = '00' and product = ?"#,
+                )
+                .bind(&signin.product)
+                .fetch_one(&mut *txn)
+                .await
+                .map_err(|e| {
+                    tracing::error!(?e);
+                    Error::ProductNotExists
+                })?;
+
+                sqlx::query(
+                    "insert into user_product(`user_id`, `product_id`, `status`, `update_time`) values (?, ?, '00', unixepoch(current_timestamp))",
+                )
+                .bind(user.id.unwrap())
+                .bind(product.id.unwrap())
+                .execute(&mut *txn).await.map_err(|e| {
+                    Error::DatabaseException(e.to_string())
+                })?;
+
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            } else {
+                return Err(Error::ProductNotOpen);
+            }
         }
         let product = (*open_products.get(0).unwrap()).clone();
 
-        Ok((user, product))
+        let token = {
+            let mut txn = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            let token = Session::token(product.id.unwrap(), user.id.unwrap());
+
+            if let Err(e) = sqlx::query(
+                "insert into session(token, user_id, product_id, expire) values (?, ?, ?, ?)",
+            )
+            .bind(&token.token)
+            .bind(token.user_id)
+            .bind(token.product_id)
+            .bind(token.expire)
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+
+            txn.commit()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+            token
+        };
+
+        Ok((user, product, token))
     }
 
-    async fn query_products(&self, user_id: i64) -> Result<Vec<Product>> {
+    async fn get_session(&self, token: &str) -> Result<Session> {
+        let mut session = sqlx::query_as::<_, Session>(
+            r#"select id, token, user_id, product_id, expire 
+            from session 
+            where token = ?"#,
+        )
+        .bind(token)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(?e);
+            Error::TokenInvalid
+        })?;
+
+        let res = {
+            let mut res = Err(Error::TokenInvalid);
+            let mut txn = self
+                .pool
+                .begin()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            let now = Local::now().timestamp();
+
+            if session.expire < now {
+                if let Err(e) = sqlx::query("delete from session where token = ?")
+                    .bind(&session.token)
+                    .execute(&mut *txn)
+                    .await
+                {
+                    txn.rollback()
+                        .await
+                        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                    return Err(Error::DatabaseException(e.to_string()));
+                }
+            } else if session.expire - now < CONFIG.session_refresh {
+                let expire = now + CONFIG.session_expire;
+                if let Err(e) = sqlx::query("update session set expire = ? where token = ?")
+                    .bind(expire)
+                    .bind(&session.token)
+                    .execute(&mut *txn)
+                    .await
+                {
+                    txn.rollback()
+                        .await
+                        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                    return Err(Error::DatabaseException(e.to_string()));
+                }
+
+                session.expire = now;
+                res = Ok(session)
+            } else {
+                res = Ok(session)
+            }
+
+            txn.commit()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            res
+        };
+
+        res
+    }
+
+    async fn update_user_info(
+        &self,
+        user_id: i64,
+        product_id: i64,
+        user_name: Option<String>,
+        passwd: Option<String>,
+        avatar: Option<String>,
+    ) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        if let Some(new_user_name) = user_name {
+            if let Err(e) = sqlx::query("update user set user_name = ? where id = ?")
+                .bind(&new_user_name)
+                .bind(user_id)
+                .execute(&mut *txn)
+                .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+        if let Some(new_passwd) = passwd {
+            if let Err(e) = sqlx::query("update user set user_name = ? where id = ?")
+                .bind(&new_passwd)
+                .bind(user_id)
+                .execute(&mut *txn)
+                .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+        if let Some(new_avatar) = avatar {
+            if let Err(e) = sqlx::query(
+                "update user_product set avatar = ? where user_id = ? and product_id = ?",
+            )
+            .bind(&new_avatar)
+            .bind(user_id)
+            .bind(product_id)
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn query_user_products(&self, user_id: i64) -> Result<Vec<Product>> {
         let products = sqlx::query_as::<_, Product>(
             r#"select a.id as id, a.product as product, a.desc as desc, a.update_time as update_time
             from product a, user_product b 
@@ -193,34 +392,48 @@ impl AppServRepo for SqliteRepo {
         .bind(&user_id)
         .fetch_all(&self.pool)
         .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(products)
+    }
+
+    async fn query_products(&self) -> Result<Vec<Product>> {
+        let products = sqlx::query_as::<_, Product>(
+            r#"select a.id as id, a.product as product, a.desc as desc, a.update_time as update_time
+            from product a
+            where a.status = '00' and 1 = ? "#,
+        )
+        .bind(1)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(products)
+    }
+
+    async fn query_product(&self, product_id: i64) -> Result<Product> {
+        let product = sqlx::query_as::<_, Product>(
+            r#"select id, product, desc, status, update_time
+            from product 
+            where status = '00' and id = ?"#,
+        )
+        .bind(product_id)
+        .fetch_one(&self.pool)
+        .await
         .map_err(|e| {
             tracing::error!(?e);
             Error::ProductNotExists
         })?;
 
-        Ok(products)
+        Ok(product)
     }
-
-    async fn query_product_user(&self, product_id: i64, user_id: i64) -> Result<ProductUser> {
-        let user = sqlx::query_as::<_, ProductUser>(
-            // r#"select a.id as user_id, a.user_name as user_name, a.email as email, 
-            // b.avatar as avatar, b.status as status, b.update_time as update_time
-            // from user a, user_product b 
-            // where a.id = b.user_id and a.status = '00' and b.status = '00' and b.user_id = ? and b.product_id = ?"#,
-            // pub product_id: i64,
-            // pub user_id: i64,
-            // pub user_name: String,
-            // pub email: String,
-            // pub avatar: String,
-            // pub status: String,
-            // pub update_time: i64,
-            r#"select a.id as user_id, a.user_name, a.email, 
-            b.product_id, b.avatar, b.status, b.update_time 
-            from user a, user_product b 
-            where a.id = b.user_id and a.status = '00' and b.status = '00' and b.user_id = ? and b.product_id = ?"#,
+    async fn query_user(&self, user_id: i64) -> Result<User> {
+        let user = sqlx::query_as::<_, User>(
+            r#"select id, user_name, email, passwd, status, update_time
+            from user
+            where status = '00' and id = ?"#,
         )
         .bind(user_id)
-        .bind(product_id)
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
@@ -229,5 +442,525 @@ impl AppServRepo for SqliteRepo {
         })?;
 
         Ok(user)
+    }
+    async fn query_user_product(&self, user_id: i64, product_id: i64) -> Result<UserProduct> {
+        let user_product = sqlx::query_as::<_, UserProduct>(
+            r#"select id, product_id, user_id, avatar, status, update_time
+            from user_product 
+            where status = '00' and product_id = ? and user_id = ?"#,
+        )
+        .bind(product_id)
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            tracing::error!(?e);
+            Error::ProductNotOpen
+        })?;
+
+        Ok(user_product)
+    }
+    async fn delete_session(&self, token: &str) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        if let Err(e) = sqlx::query("delete from session where token = ?")
+            .bind(token)
+            .execute(&mut *txn)
+            .await
+        {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn query_recently(&self, user_id: i64) -> Result<Vec<Recently>> {
+        let recently = sqlx::query_as::<_, Recently>(
+            r#"select id, user_id, stationuuid, start_time, end_time 
+            from hiqradio_recently
+            where user_id = ? order by start_time desc"#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(recently)
+    }
+
+    async fn delete_recently(&self, user_id: i64) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        if let Err(e) = sqlx::query("delete from hiqradio_recently where user_id = ?")
+            .bind(user_id)
+            .execute(&mut *txn)
+            .await
+        {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn new_recently(&self, user_id: i64, recently: &Vec<RecentlyNew>) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut count: usize = 0;
+        for (_, e) in recently.into_iter().enumerate() {
+            if let Err(e) = sqlx::query(
+                r#"insert into hiqradio_recently(user_id, stationuuid, start_time, end_time) 
+                values (?, ?, ?, ?)"#,
+            )
+            .bind(user_id)
+            .bind(&e.stationuuid)
+            .bind(e.start_time)
+            .bind(e.end_time)
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            count += 1;
+
+            if count >= 50 {
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+                txn = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            }
+        }
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn query_groups(&self, user_id: i64) -> Result<Vec<FavGroup>> {
+        let groups = sqlx::query_as::<_, FavGroup>(
+            r#"select id, user_id, create_time, name, desc, is_def 
+            from hiqradio_fav_group
+            where user_id = ?"#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(groups)
+    }
+
+    async fn delete_groups(&self, user_id: i64, groups: &Vec<String>) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        let mut count: usize = 0;
+        for (_, e) in groups.into_iter().enumerate() {
+            if let Err(e) =
+                sqlx::query(r#"delete from hiqradio_fav_group where name = ? and user_id = ?"#)
+                    .bind(e)
+                    .bind(user_id)
+                    .execute(&mut *txn)
+                    .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            count += 1;
+
+            if count >= 50 {
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+                txn = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            }
+        }
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn new_groups(&self, user_id: i64, groups: &Vec<GroupNew>) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        let mut count: usize = 0;
+        for (_, e) in groups.into_iter().enumerate() {
+            if let Ok(_) = sqlx::query_as::<_, FavGroup>(
+                r#"select id, user_id, create_time, name, desc, is_def 
+                from hiqradio_fav_group
+                where user_id = ? and name = ?"#,
+            )
+            .bind(user_id)
+            .bind(&e.name)
+            .fetch_one(&mut *txn)
+            .await
+            {
+                continue;
+            }
+
+            if e.is_def > 0 {
+                if let Ok(_) = sqlx::query_as::<_, FavGroup>(
+                    r#"select id, user_id, create_time, name, desc, is_def 
+                    from hiqradio_fav_group
+                    where user_id = ? and is_def = 0"#,
+                )
+                .bind(user_id)
+                .fetch_one(&mut *txn)
+                .await
+                {
+                    continue;
+                }
+            }
+
+            if let Err(e) = sqlx::query(
+                r#"insert into hiqradio_fav_group(user_id, create_time, name, desc, is_def) 
+                values(?, ?, ?, ?, ?)"#,
+            )
+            .bind(user_id)
+            .bind(e.create_time)
+            .bind(&e.name)
+            .bind(&e.desc)
+            .bind(e.is_def)
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            count += 1;
+
+            if count >= 50 {
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+                txn = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            }
+        }
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+    async fn modify_group(&self, user_id: i64, old_name: &str, name: &str, desc: &str) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        if let Err(e) = sqlx::query(
+            r#"update hiqradio_fav_group set name = ?, desc = ? where name = ? and user_id = ?"#,
+        )
+        .bind(name)
+        .bind(desc)
+        .bind(old_name)
+        .bind(user_id)
+        .execute(&mut *txn)
+        .await
+        {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn query_favorites(&self, user_id: i64) -> Result<Vec<StationGroup>> {
+        let groups = sqlx::query_as::<_, StationGroup>(
+            r#"select a.name as group_name,  b.stationuuid
+            from hiqradio_fav_group a, hiqradio_favorite b
+            where a.id = b.group_id and a.user_id = b.user_id and a.user_id = ?"#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(groups)
+    }
+    async fn new_favorite(&self, user_id: i64, stations: &Vec<StationGroup>) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        let mut count: usize = 0;
+        for (_, elem) in stations.into_iter().enumerate() {
+            let group = sqlx::query_as::<_, FavGroup>(
+                r#"select id, user_id, create_time, name, desc, is_def 
+                from hiqradio_fav_group
+                where user_id = ? and name = ?"#,
+            )
+            .bind(user_id)
+            .bind(&elem.group_name)
+            .fetch_one(&mut *txn)
+            .await;
+
+            if let Err(e) = &group {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            let group = group.unwrap();
+
+            if let Ok(_) = sqlx::query_as::<_, Favorite>(
+                r#"select id, user_id, stationuuid, group_id 
+                from hiqradio_favorite
+                where user_id = ? and group_id = ? and stationuuid = ?"#,
+            )
+            .bind(user_id)
+            .bind(group.id.unwrap())
+            .bind(&elem.stationuuid)
+            .fetch_one(&mut *txn)
+            .await
+            {
+                continue;
+            }
+
+            if let Err(e) = sqlx::query(
+                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id) 
+                values(?, ?, ?)"#,
+            )
+            .bind(user_id)
+            .bind(&elem.stationuuid)
+            .bind(group.id.unwrap())
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            count += 1;
+
+            if count >= 50 {
+                txn.commit()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+                txn = self
+                    .pool
+                    .begin()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            }
+        }
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn delete_favorite(
+        &self,
+        user_id: i64,
+        favorites: &Option<Vec<String>>,
+        group_names: &Option<Vec<String>>,
+    ) -> Result {
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        if let Some(favorites) = favorites {
+            let params = format!("?{}", ", ?".repeat(favorites.len() - 1));
+            let query_str = format!(
+                r#"delete from hiqradio_favorite  
+                where user_id = ? and stationuuid in ({})"#,
+                params
+            );
+
+            let mut query = sqlx::query(&query_str);
+            query = query.bind(user_id);
+
+            for param in favorites {
+                query = query.bind(param);
+            }
+            if let Err(e) = query.execute(&mut *txn).await {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+        if let Some(group_names) = group_names {
+            let params = format!("?{}", ", ?".repeat(group_names.len() - 1));
+            let query_str = format!(
+                r#"delete from hiqradio_favorite  
+                where user_id = ? and group_id in (
+                    select id from hiqradio_fav_group where name in ({})
+                )"#,
+                params
+            );
+
+            let mut query = sqlx::query(&query_str);
+            query = query.bind(user_id);
+
+            for param in group_names {
+                query = query.bind(param);
+            }
+
+            if let Err(e) = query.execute(&mut *txn).await {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
+    }
+
+    async fn modify_favorite(
+        &self,
+        user_id: i64,
+        stationuuid: &str,
+        groups: &Vec<String>,
+    ) -> Result {
+        if let Err(e) = sqlx::query_as::<_, Favorite>(
+            r#"select id, user_id, stationuuid, group_id
+            from hiqradio_favorite 
+            where user_id = ? and stationuuid = ?"#,
+        )
+        .bind(user_id)
+        .bind(stationuuid)
+        .fetch_one(&self.pool)
+        .await
+        {
+            return match e {
+                sqlx::Error::RowNotFound => Err(Error::Custom(format!("station not found",))),
+
+                _ => Err(Error::DatabaseException(e.to_string())),
+            };
+        }
+
+        let mut txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        if let Err(e) = sqlx::query(
+            r#"delete from hiqradio_favorite  
+            where user_id = ? and stationuuid = ?"#,
+        )
+        .bind(user_id)
+        .bind(stationuuid)
+        .execute(&mut *txn)
+        .await
+        {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+
+        let params = format!("?{}", ", ?".repeat(groups.len() - 1));
+        let query_str = format!(
+            r#"select id, user_id, create_time, name, desc, is_def 
+        from hiqradio_fav_group
+        where user_id = ? and name in ({})"#,
+            params
+        );
+
+        let mut query = sqlx::query_as::<_, FavGroup>(&query_str);
+
+        query = query.bind(user_id);
+        for param in groups {
+            query = query.bind(param);
+        }
+        let groups = query.fetch_all(&mut *txn).await;
+        if let Err(e) = &groups {
+            txn.rollback()
+                .await
+                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            return Err(Error::DatabaseException(e.to_string()));
+        }
+        let groups = groups.unwrap();
+
+        for e in groups {
+            if let Err(e) = sqlx::query(
+                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id) 
+                values(?, ?, ?)"#,
+            )
+            .bind(user_id)
+            .bind(stationuuid)
+            .bind(e.id.unwrap())
+            .execute(&mut *txn)
+            .await
+            {
+                txn.rollback()
+                    .await
+                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+        }
+
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        Ok(())
     }
 }

@@ -26,10 +26,15 @@ async fn main() {
     tokio::spawn(async move {
         tracing::info!("clear session task");
         loop {
+            // 清理过期
             if let Err(e) = store.cleanup().await {
                 tracing::error!(?e);
             }
             debug!("store count: {}", store.count().await);
+
+            // 清理文件
+
+            // 清理过期token
 
             tokio::time::sleep(Duration::from_secs(CONFIG.clear_interval as u64)).await;
         }

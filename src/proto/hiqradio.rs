@@ -1,59 +1,84 @@
-// use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
+use crate::model::hiqradio::{FavGroup, Recently, StationGroup};
 
+/// 最近播放
+#[derive(Debug, Serialize)]
+pub struct RecentlyRsp {
+    pub error: usize,
+    pub message: String,
+    pub recently: Vec<Recently>,
+}
 
-// /// 验证码
-// #[derive(Debug, Serialize)]
-// pub struct CaptchaResp {
-//     pub error: usize,
-//     pub captcha_id: String,
-//     pub captcha: String,
-// }
+/// 新增记录
+#[derive(Debug, Deserialize)]
+pub struct RecentlyNew {
+    pub stationuuid: String,
+    pub start_time: i64,
+    pub end_time: Option<i64>,
+}
+#[derive(Debug, Deserialize)]
+pub struct RecentlyNewReq {
+    pub new_recently: Vec<RecentlyNew>,
+}
 
-// /// 注册
-// #[derive(Debug, Deserialize)]
-// pub struct SignUpReq {
-//     pub user_name: String,
-//     pub email: String,
-//     pub passwd: String,
-//     pub captcha_id: String,
-//     pub captcha: String,
-// }
+#[derive(Debug, Deserialize)]
+pub struct GroupsReq {
+    pub groups: Option<Vec<String>>,
+}
+/// 最近播放
+#[derive(Debug, Serialize)]
+pub struct GroupsRsp {
+    pub error: usize,
+    pub message: String,
+    pub groups: Vec<FavGroup>,
+}
 
-// pub type SignUpResp = BaseResp;
+#[derive(Debug, Deserialize)]
+pub struct GroupDeleteReq {
+    pub groups: Vec<String>,
+}
 
-// /// 激活
-// #[derive(Debug, Deserialize)]
-// pub struct ActivateReq {
-//     pub activate: String,
-// }
-// pub type ActivateResp = BaseResp;
+#[derive(Debug, Deserialize)]
+pub struct GroupNew {
+    pub create_time: i64,
+    pub name: String,
+    pub desc: String,
+    pub is_def: i64,
+}
 
-// /// 登录
-// #[derive(Debug, Deserialize)]
-// pub struct SignInReq {
-//     pub user_name: String,
-//     pub passwd: String,
-//     pub captcha_id: String,
-//     pub captcha: String,
-// }
+#[derive(Debug, Deserialize)]
+pub struct GroupNewReq {
+    pub new_group: Vec<GroupNew>,
+}
 
-// pub type SignInResp = BaseResp;
+#[derive(Debug, Deserialize)]
+pub struct GroupModifyReq {
+    pub old_name: String,
+    pub name: String,
+    pub desc: String,
+}
 
-// /// 登录
-// #[derive(Debug, Serialize)]
-// pub struct IsSignInResp {
-//     pub error: usize,
-//     pub is_signin: isize,
-// }
+#[derive(Debug, Serialize)]
+pub struct FavoritesRsp {
+    pub error: usize,
+    pub message: String,
+    pub favorites: Vec<StationGroup>,
+}
 
-// /// 用户基本信息
-// #[derive(Debug, Serialize)]
-// pub struct UserInfoResp {
-//     pub error: usize,
-//     pub user_name: String,
-//     pub email: String,
-//     pub avatar: Option<String>,
-// }
+#[derive(Debug, Deserialize)]
+pub struct FavoriteNewReq {
+    pub new_favorite: Vec<StationGroup>,
+}
 
-// pub type SignOutResp = BaseResp;
+#[derive(Debug, Deserialize)]
+pub struct FavoriteDeleteReq {
+    pub favorites: Option<Vec<String>>,
+    pub group_names: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FavoriteModifyReq {
+    pub stationuuid: String,
+    pub group_names: Vec<String>,
+}

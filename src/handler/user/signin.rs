@@ -4,8 +4,7 @@ use axum_extra::{extract::WithRejection, headers::Cookie, TypedHeader};
 use crate::{
     app_state::AppState,
     errors::{Error, E_SUCCESS},
-    handler::COOKIE_NAME,
-    jwt::Claims,
+    handler::{ok_with_trace, COOKIE_NAME},
     proto::{SignInReq, SignInRsp},
     JsonRejection, Result,
 };
@@ -17,6 +16,8 @@ pub async fn signin(
     TypedHeader(cookies): TypedHeader<Cookie>,
     WithRejection(Json(payload), _): JsonRejection<SignInReq>,
 ) -> Result<impl IntoResponse> {
+    tracing::info!("\nreq: {:?}\n", &payload);
+
     {
         if payload.email.is_empty()
             || payload.passwd.is_empty()
@@ -50,15 +51,14 @@ pub async fn signin(
             .map_err(|e| Error::Custom(format!("destroy session error: {}", e)))?;
     }
 
-    let (user, product) = state.repo.signin_user(&payload).await?;
+    let (user, product, session) = state.repo.signin_user(&payload).await?;
     tracing::info!(?user, ?product);
 
-    let token = Claims::token(product.id.unwrap(), user.id.unwrap())?;
     let rsp = SignInRsp {
         error: E_SUCCESS,
         message: "success".to_string(),
-        token,
+        token: session.token,
     };
 
-    Ok(Json(rsp))
+    ok_with_trace(rsp)
 }

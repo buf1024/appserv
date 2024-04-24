@@ -9,7 +9,7 @@ use regex::Regex;
 use crate::{
     app_state::AppState,
     errors::{Error, E_SUCCESS},
-    handler::COOKIE_NAME,
+    handler::{ok_with_trace, COOKIE_NAME},
     proto::{SendEmailCodeReq, SendEmailCodeRsp},
     util, JsonRejection, JsonResult,
 };
@@ -21,6 +21,8 @@ pub async fn send_email_code(
     TypedHeader(cookies): TypedHeader<headers::Cookie>,
     WithRejection(Json(payload), _): JsonRejection<SendEmailCodeReq>,
 ) -> JsonResult<SendEmailCodeRsp> {
+    tracing::info!("\nreq: {:?}\n", &payload);
+
     let mut session = {
         tracing::info!(?payload);
         if payload.email.is_empty() || payload.captcha.is_empty() {
@@ -72,10 +74,16 @@ pub async fn send_email_code(
         code.push_str(&format!("{}", rng.gen_range(0..9)));
     }
 
+    tracing::info!("verify code: {}", &code);
+
     session.expire_in(Duration::from_secs(60 * 5));
 
     session
         .insert("code", code.clone())
+        .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
+
+    session
+        .insert("email", payload.email.clone())
         .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
 
     session
@@ -96,5 +104,5 @@ pub async fn send_email_code(
         message: "success".to_string(),
     };
 
-    Ok(Json(rsp))
+    ok_with_trace(rsp)
 }

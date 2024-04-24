@@ -1,3 +1,12 @@
+-- session
+create table if not exists session (
+    `id` integer not null primary key autoincrement,
+    `token` char(32) not null,
+    `product_id` integer not null,
+    `user_id` integer not null,
+    `expire` integer not null
+);
+
 -- 公用user和product
 create table if not exists user (
     `id` integer not null primary key autoincrement,
@@ -39,7 +48,7 @@ create index idx_user_product on user_product(`product_id`, `user_id`);
 -- hiqradio
 create table if not exists hiqradio_recently (
     `id` integer not null primary key autoincrement,
-    `user_id` varchar(64) not null,
+    `user_id` integer not null,
     `stationuuid` varchar(40) not null,
     `start_time` integer not null,
     `end_time` integer null
@@ -47,18 +56,18 @@ create table if not exists hiqradio_recently (
 
 create table if not exists hiqradio_fav_group (
     `id` integer not null primary key autoincrement,
-    `user_id` varchar(64) not null,
+    `user_id` integer not null,
     `create_time` integer not null,
     `name` varchar(255) not null,
     `desc` varchar(1024) null,
-    `is_def` integer null
+    `is_def` integer not null
 );
 
 create table hiqradio_favorite (
     `id` integer primary key autoincrement,
-    `user_id` varchar(64) not null,
+    `user_id` integer not null,
     `stationuuid` varchar(40) not null,
-    `group_id` integer
+    `group_id` integer not null
 );
 
 insert into

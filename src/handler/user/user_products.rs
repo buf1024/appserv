@@ -5,11 +5,12 @@ use crate::{
     proto::ProductsRsp, JsonResult,
 };
 #[debug_handler(state = AppState)]
-pub async fn products(
+pub async fn user_products(
     State(state): State<AppState>,
-    _auth_user: AuthUser,
+    auth_user: AuthUser,
 ) -> JsonResult<ProductsRsp> {
-    let products = state.repo.query_products().await?;
+    let user = auth_user.user;
+    let products = state.repo.query_user_products(user.id.unwrap()).await?;
     let rsp = ProductsRsp {
         error: E_SUCCESS,
         message: "success".into(),

@@ -10,8 +10,6 @@ pub mod proto;
 pub mod repo;
 pub mod util;
 
-pub mod jwt;
-
 pub mod auth_user;
 
 /// 模块定义结果状态

@@ -2,13 +2,10 @@ avatar_path = "./avatar"
 clear_interval = 60
 db_url = "sqlite://appserv.db"
 listen = "127.0.0.1:4000"
-session_interval = 300
-# 123abc
-jwt_key = "aa5f704d9a0eccde71070d8697a8c1ff"
 # 15天过期
-jwt_exp = 1296000
+session_expire = 1296000
 # 1小时刷新token
-jwt_refresh = 3600
+session_refresh = 3600
 smtp_host = "smtp.163.com"
 smtp_passwd = "PQHGCAXUAAGMMLCE"
 smtp_sender = "toyent@163.com"

@@ -8,13 +8,11 @@ pub static CONFIG: Lazy<Config> = Lazy::new(Config::load_config);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub avatar_path: String,
-    pub jwt_key: String,
-    pub jwt_exp: i64,
-    pub jwt_refresh: i64,
+    pub session_expire: i64,
+    pub session_refresh: i64,
     pub db_url: String,
     pub listen: String,
     pub clear_interval: usize,
-    pub session_interval: usize,
     pub smtp_sender: Option<String>,
     pub smtp_host: Option<String>,
     pub smtp_passwd: Option<String>,
@@ -29,11 +27,9 @@ impl Default for Config {
             smtp_sender: None,
             smtp_host: None,
             smtp_passwd: None,
-            session_interval: 60 * 5,
             avatar_path: String::from("./avatar"),
-            jwt_key: String::from("aa5f704d9a0eccde71070d8697a8c1ff"), // 123abc
-            jwt_exp: 1296000, // 15天过期
-            jwt_refresh: 3600, // 1小时
+            session_expire: 1296000, // 15天过期
+            session_refresh: 3600, // 1小时
         }
     }
 }

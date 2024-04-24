@@ -5,7 +5,7 @@ use regex::Regex;
 use crate::{
     app_state::AppState,
     errors::{Error, E_SUCCESS},
-    handler::COOKIE_NAME,
+    handler::{ok_with_trace, COOKIE_NAME},
     proto::{SignUpReq, SignUpRsp},
     util, JsonRejection, JsonResult,
 };
@@ -18,7 +18,8 @@ pub async fn signup(
     WithRejection(Json(payload), _): JsonRejection<SignUpReq>,
 ) -> JsonResult<SignUpRsp> {
     {
-        tracing::info!(?payload);
+        tracing::info!("\nreq: {:?}\n", &payload);
+
         if payload.email.is_empty()
             || payload.passwd.is_empty()
             || payload.captcha.is_empty()
@@ -56,6 +57,10 @@ pub async fn signup(
             .get("code")
             .ok_or(Error::Custom(format!("code not found")))?;
 
+        let email: String = session
+            .get("email")
+            .ok_or(Error::Custom(format!("email not found")))?;
+
         if captcha.to_lowercase() != payload.captcha.to_lowercase() {
             return Err(Error::Captcha);
         }
@@ -63,6 +68,11 @@ pub async fn signup(
         if code.to_lowercase() != payload.code.to_lowercase() {
             return Err(Error::Code);
         }
+
+        if email != payload.email {
+            return Err(Error::Email);
+        }
+
         state
             .store
             .destroy_session(session)
@@ -87,5 +97,5 @@ pub async fn signup(
         message: "success".to_string(),
     };
 
-    Ok(Json(rsp))
+    ok_with_trace(rsp)
 }

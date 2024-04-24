@@ -39,11 +39,10 @@ pub fn send_email(receiver: String, subject: String, body: String) -> Result {
         Ok(_) => {
             tracing::info!("send email success: {}", receiver);
             Ok(())
-        },
+        }
         Err(e) => {
             tracing::error!("send email error: {e}");
             Err(Error::Custom("send email error".to_string()))
         }
     }
 }
-

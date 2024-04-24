@@ -13,11 +13,11 @@ use serde::{Deserialize, Serialize};
 pub const USER_PRODUCT_STATUS_NORMAL: &'static str = "00";
 pub const USER_PRODUCT_STATUS_CANCEL: &'static str = "99";
 
+
 #[derive(Debug, Serialize, Deserialize, sqlx::FromRow)]
-pub struct ProductUser {
+pub struct UserProduct {
+    pub id: Option<i64>,
     pub user_id: i64,
-    pub user_name: String,
-    pub email: String,
     pub product_id: i64,
     pub avatar: String,
     pub status: String,

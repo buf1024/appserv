@@ -29,8 +29,11 @@ pub enum Error {
     #[error("captcha error")]
     Captcha,
     /// 邮箱验证码
-    #[error("captcha error")]
+    #[error("verify code error")]
     Code,
+    /// 邮箱验证码
+    #[error("email error")]
+    Email,
     /// 操作过于频繁
     #[error("operation too frequent")]
     Frequent,
@@ -52,9 +55,9 @@ pub enum Error {
     /// 解析json错误
     #[error(transparent)]
     JsonExtractorRejection(#[from] JsonRejection),
-    /// 接口未实现异常
-    #[error("database exception")]
-    DatabaseException,
+    /// 数据库异常
+    #[error("database exception: \"{0}\" ")]
+    DatabaseException(String),
     /// 自定义错误，为了偷懒，不定义太多错误。
     /// 未能上述表示的错误，一律用此表示
     #[error("Error: {0}")]
@@ -71,7 +74,9 @@ impl IntoResponse for Error {
             ),
             Error::Parse(message) => (E_PARSE_REQ, format!("protocol error: \"{}\"", message)),
             Error::UserExists(message) => (E_USER_EXISTS, format!("signup error: \"{}\"", message)),
-            Error::DatabaseException => (E_INTERNAL, format!("database exception")),
+            Error::DatabaseException(message) => {
+                (E_INTERNAL, format!("database exception: \"{}\"", message))
+            }
             Error::Captcha => (E_BAD_CAPTCHA, format!("captcha error")),
             Error::UserPasswdError => (E_USER_NOT_EXISTS, format!("user password error")),
             Error::UserNotExists => (E_BAD_PASSWD, format!("user not exists")),
@@ -86,11 +91,14 @@ impl IntoResponse for Error {
                 E_PASSWORD_ILLEGAL,
                 format!("password illegal, length must at least 6"),
             ),
+            Error::Email => (E_EMAIL_DIFF, format!("email not equal")),
         };
         let body = Json(json!({
             "error": error,
             "message": message
         }));
+
+        tracing::info!("\nrsp: {:?}\n", body);
 
         (StatusCode::OK, body).into_response()
     }
@@ -106,10 +114,11 @@ pub const E_USER_NOT_EXISTS: usize = 403;
 pub const E_BAD_PASSWD: usize = 404;
 pub const E_TOO_FREQUENT: usize = 405;
 pub const E_PRODUCT_NOT_EXISTS: usize = 406;
-pub const E_PRODUCT_NOT_OPEN: usize = 407;
-pub const E_TOKEN_CREATION: usize = 408;
-pub const E_TOKEN_INVALID: usize = 409;
-pub const E_PASSWORD_ILLEGAL: usize = 410;
+pub const E_TOKEN_CREATION: usize = 407;
+pub const E_TOKEN_INVALID: usize = 408;
+pub const E_PASSWORD_ILLEGAL: usize = 409;
+pub const E_EMAIL_DIFF: usize = 410;
 
 pub const E_INTERNAL: usize = 500;
+pub const E_PRODUCT_NOT_OPEN: usize = 888;
 pub const E_BAD_PROTOCOL: usize = 900;
