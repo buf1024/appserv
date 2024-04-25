@@ -622,6 +622,30 @@ impl AppServRepo for SqliteRepo {
 
         let mut count: usize = 0;
         for (_, e) in groups.into_iter().enumerate() {
+            let group = sqlx::query_as::<_, FavGroup>(
+                r#"select id, user_id, create_time, name, desc, is_def 
+                from hiqradio_fav_group
+                where user_id = ? and name = ?"#,
+            )
+            .bind(user_id)
+            .bind(e)
+            .fetch_one(&mut *txn)
+            .await;
+            if let Err(e) = group {
+                self.rollback(txn).await?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+            let group = group.unwrap();
+
+            if let Err(e) = sqlx::query(r#"delete from hiqradio_favorite where group_id = ?"#)
+                .bind(group.id.unwrap())
+                .execute(&mut *txn)
+                .await
+            {
+                self.rollback(txn).await?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+
             if let Err(e) =
                 sqlx::query(r#"delete from hiqradio_fav_group where name = ? and user_id = ?"#)
                     .bind(e)
@@ -632,6 +656,7 @@ impl AppServRepo for SqliteRepo {
                 self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
+
             count += 1;
 
             if count >= 50 {
