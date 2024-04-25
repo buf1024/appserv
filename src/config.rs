@@ -8,11 +8,12 @@ pub static CONFIG: Lazy<Config> = Lazy::new(Config::load_config);
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub avatar_path: String,
-    pub session_expire: i64,
-    pub session_refresh: i64,
+    pub token_expire: i64,
+    pub token_refresh: i64,
     pub db_url: String,
     pub listen: String,
-    pub clear_interval: usize,
+    pub session_interval: usize,
+    pub clean_interval: usize,
     pub smtp_sender: Option<String>,
     pub smtp_host: Option<String>,
     pub smtp_passwd: Option<String>,
@@ -23,13 +24,14 @@ impl Default for Config {
         Self {
             db_url: String::from("sqlite://appserv.db"),
             listen: String::from("127.0.0.1:3000"),
-            clear_interval: 60,
+            session_interval: 60,
+            clean_interval: 900,
             smtp_sender: None,
             smtp_host: None,
             smtp_passwd: None,
             avatar_path: String::from("./avatar"),
-            session_expire: 1296000, // 15天过期
-            session_refresh: 3600, // 1小时
+            token_expire: 1296000, // 15天过期
+            token_refresh: 3600,   // 1小时
         }
     }
 }

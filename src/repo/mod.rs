@@ -23,6 +23,9 @@ use self::sqlite::SqliteRepo;
 
 #[async_trait]
 pub trait AppServRepo {
+    async fn clean_avatar_path(&self, path: &str) -> Result;
+    async fn clean_session(&self) -> Result;
+
     // service
     async fn create_user(&self, signup: &SignUpReq) -> Result<User>;
     async fn signin_user(&self, signin: &SignInReq) -> Result<(User, Product, Session)>;

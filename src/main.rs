@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{fs, time::Duration};
 
 use appserv::{app_router::app_router, app_state::AppState, config::CONFIG};
+use chrono::{Datelike, Days, Local, TimeZone};
 use tokio::{net::TcpListener, signal};
 use tracing::{debug, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -26,7 +27,7 @@ async fn main() {
     tokio::spawn(async move {
         tracing::info!("clear session task");
         loop {
-            // 清理过期
+            // 清理过期数据
             if let Err(e) = store.cleanup().await {
                 tracing::error!(?e);
             }
@@ -36,7 +37,61 @@ async fn main() {
 
             // 清理过期token
 
-            tokio::time::sleep(Duration::from_secs(CONFIG.clear_interval as u64)).await;
+            tokio::time::sleep(Duration::from_secs(CONFIG.session_interval as u64)).await;
+        }
+    });
+
+    let repo = state.repo.clone();
+    tokio::spawn(async move {
+        tracing::info!("file and token clear task");
+
+        let start_time_fn = || {
+            let now = Local::now();
+            let now = now.checked_add_days(Days::new(1)).unwrap();
+
+            let next = chrono::Local
+                .with_ymd_and_hms(now.year(), now.month(), now.day(), 0, 15, 0)
+                .unwrap();
+
+            tracing::info!(
+                "next clean time: {}-{:02}-{:02} 00:15:00",
+                next.year(),
+                next.month(),
+                next.day()
+            );
+            next.timestamp()
+        };
+
+        let mut start_time = 0;
+        loop {
+            let now = Local::now().timestamp();
+            if now >= start_time {
+                // 清理文件
+                tracing::info!("clean avatar file..");
+                if let Ok(read_dir) = fs::read_dir(&CONFIG.avatar_path) {
+                    for e in read_dir {
+                        if let Ok(entry) = e {
+                            if entry.path().is_file() {
+                                if let Some(file_name) = entry.file_name().to_str() {
+                                    if let Err(e) = repo.clean_avatar_path(file_name).await {
+                                        tracing::error!("clean avatar error: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 清理过期token
+                tracing::info!("clean expire token..");
+                if let Err(e) = repo.clean_session().await {
+                    tracing::error!("clean avatar error: {}", e);
+                }
+
+                start_time = start_time_fn();
+            }
+
+            tokio::time::sleep(Duration::from_secs(CONFIG.clean_interval as u64)).await;
         }
     });
 

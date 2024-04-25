@@ -1,11 +1,16 @@
-avatar_path = "./avatar"
-clear_interval = 60
 db_url = "sqlite://appserv.db"
 listen = "127.0.0.1:4000"
+
+avatar_path = "./avatar"
+# 5s过期会话清理
+session_interval = 5
+# 15min文件有限和token有效管理
+clean_interval = 900
+
 # 15天过期
-session_expire = 1296000
-# 1小时刷新token
-session_refresh = 3600
+token_expire = 1296000
+# 离过期1小时刷新token
+token_refresh = 3600
 smtp_host = "smtp.163.com"
 smtp_passwd = "PQHGCAXUAAGMMLCE"
 smtp_sender = "toyent@163.com"

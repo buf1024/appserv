@@ -1,8 +1,10 @@
+use std::fs;
+
 use async_trait::async_trait;
 use chrono::Local;
 use data_encoding::HEXLOWER;
 use ring::digest::{Context, SHA256};
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, Transaction};
 
 use crate::{
     config::CONFIG,
@@ -54,10 +56,105 @@ impl SqliteRepo {
             update_time: Local::now().timestamp(),
         }
     }
+
+    fn build_in_param<T>(&self, param: &Vec<T>) -> String {
+        let len = param.len();
+        match len {
+            0 => String::from(""),
+            1 => String::from("?"),
+            _ => format!("?{}", ", ?".repeat(param.len() - 1)),
+        }
+    }
+
+    async fn begin(&self) -> Result<Transaction<'static, Sqlite>> {
+        let txn = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(txn)
+    }
+    async fn rollback(&self, txn: Transaction<'static, Sqlite>) -> Result {
+        txn.rollback()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(())
+    }
+    async fn commit(&self, txn: Transaction<'static, Sqlite>) -> Result {
+        txn.commit()
+            .await
+            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl AppServRepo for SqliteRepo {
+    async fn clean_avatar_path(&self, path: &str) -> Result {
+        if let Err(e) = sqlx::query_as::<_, UserProduct>(
+            r#"select id, product_id, user_id, avatar, status, update_time
+            from user_product 
+            where avatar = ?"#,
+        )
+        .bind(path)
+        .fetch_one(&self.pool)
+        .await
+        {
+            match e {
+                sqlx::Error::RowNotFound => {
+                    let path = format!("{}/{}", &CONFIG.avatar_path, path);
+                    tracing::info!("remove unused avatar: {}", &path);
+                    fs::remove_file(path)
+                        .map_err(|e| Error::Custom(format!("remove file error: {}", e)))?;
+                }
+
+                _ => (),
+            };
+        }
+        Ok(())
+    }
+    async fn clean_session(&self) -> Result {
+        let now = Local::now().timestamp();
+        let session: Vec<_> = sqlx::query_as::<_, Session>(
+            r#"select id, token, user_id, product_id, expire 
+            from session 
+            where expire <= ?"#,
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?
+        .iter()
+        .map(|e| e.id.unwrap())
+        .collect();
+
+        if session.len() > 0 {
+            let mut txn = self.begin().await?;
+
+            let query_str = format!(
+                r#"delete from session  
+                where id in ({})"#,
+                self.build_in_param(&session)
+            );
+
+            let mut query = sqlx::query(&query_str);
+
+            for param in session {
+                query = query.bind(param);
+            }
+            if let Err(e) = query.execute(&mut *txn).await {
+                self.rollback(txn).await?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+
+            self.commit(txn).await?;
+        }
+
+        Ok(())
+    }
     async fn create_user(&self, signup: &SignUpReq) -> Result<User> {
         if let Some(user) = sqlx::query_as::<_, User>(
             r#"select id, user_name, email, passwd, status, update_time
@@ -84,11 +181,7 @@ impl AppServRepo for SqliteRepo {
         .map_err(|e| Error::DatabaseException(e.to_string()))?
         .ok_or(Error::ProductNotExists)?;
 
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
         let passwd = {
             let mut context = Context::new(&SHA256);
             let mut data = String::new();
@@ -110,9 +203,7 @@ impl AppServRepo for SqliteRepo {
         .bind(user.update_time)
         .execute(&mut *txn)
         .await{
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
@@ -124,9 +215,7 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&mut *txn)
         .await;
         if let Err(e) = &user {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
         let user = user.unwrap();
@@ -138,15 +227,11 @@ impl AppServRepo for SqliteRepo {
         .bind(product.id.unwrap())
         .execute(&mut *txn)
         .await{
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
 
         Ok(user)
     }
@@ -160,8 +245,11 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
-            tracing::error!(?e);
-            Error::UserNotExists
+            return match e {
+                sqlx::Error::RowNotFound => Error::UserNotExists,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
         })?;
 
         let passwd = {
@@ -186,11 +274,7 @@ impl AppServRepo for SqliteRepo {
 
         if open_products.is_empty() {
             if signin.product_open_flag {
-                let mut txn = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                let mut txn = self.begin().await?;
 
                 let product = sqlx::query_as::<_, Product>(
                     r#"select id, product, desc, status, update_time
@@ -201,8 +285,11 @@ impl AppServRepo for SqliteRepo {
                 .fetch_one(&mut *txn)
                 .await
                 .map_err(|e| {
-                    tracing::error!(?e);
-                    Error::ProductNotExists
+                    return match e {
+                        sqlx::Error::RowNotFound => Error::ProductNotExists,
+
+                        _ => Error::DatabaseException(e.to_string()),
+                    };
                 })?;
 
                 sqlx::query(
@@ -214,9 +301,7 @@ impl AppServRepo for SqliteRepo {
                     Error::DatabaseException(e.to_string())
                 })?;
 
-                txn.commit()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.commit(txn).await?;
             } else {
                 return Err(Error::ProductNotOpen);
             }
@@ -224,11 +309,7 @@ impl AppServRepo for SqliteRepo {
         let product = (*open_products.get(0).unwrap()).clone();
 
         let token = {
-            let mut txn = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            let mut txn = self.begin().await?;
             let token = Session::token(product.id.unwrap(), user.id.unwrap());
 
             if let Err(e) = sqlx::query(
@@ -241,15 +322,11 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
 
-            txn.commit()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.commit(txn).await?;
 
             token
         };
@@ -267,17 +344,18 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
-            tracing::error!(?e);
-            Error::TokenInvalid
+            return match e {
+                sqlx::Error::RowNotFound => Error::TokenInvalid,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
         })?;
 
         let res = {
             let mut res = Err(Error::TokenInvalid);
-            let mut txn = self
-                .pool
-                .begin()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+            let mut txn = self.begin().await?;
+
             let now = Local::now().timestamp();
 
             if session.expire < now {
@@ -286,22 +364,18 @@ impl AppServRepo for SqliteRepo {
                     .execute(&mut *txn)
                     .await
                 {
-                    txn.rollback()
-                        .await
-                        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                    self.rollback(txn).await?;
                     return Err(Error::DatabaseException(e.to_string()));
                 }
-            } else if session.expire - now < CONFIG.session_refresh {
-                let expire = now + CONFIG.session_expire;
+            } else if session.expire - now < CONFIG.token_refresh {
+                let expire = now + CONFIG.token_expire;
                 if let Err(e) = sqlx::query("update session set expire = ? where token = ?")
                     .bind(expire)
                     .bind(&session.token)
                     .execute(&mut *txn)
                     .await
                 {
-                    txn.rollback()
-                        .await
-                        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                    self.rollback(txn).await?;
                     return Err(Error::DatabaseException(e.to_string()));
                 }
 
@@ -311,9 +385,7 @@ impl AppServRepo for SqliteRepo {
                 res = Ok(session)
             }
 
-            txn.commit()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.commit(txn).await?;
             res
         };
 
@@ -328,11 +400,7 @@ impl AppServRepo for SqliteRepo {
         passwd: Option<String>,
         avatar: Option<String>,
     ) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         if let Some(new_user_name) = user_name {
             if let Err(e) = sqlx::query("update user set user_name = ? where id = ?")
@@ -341,9 +409,7 @@ impl AppServRepo for SqliteRepo {
                 .execute(&mut *txn)
                 .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
@@ -354,9 +420,7 @@ impl AppServRepo for SqliteRepo {
                 .execute(&mut *txn)
                 .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
@@ -370,16 +434,12 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -421,8 +481,11 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
-            tracing::error!(?e);
-            Error::ProductNotExists
+            return match e {
+                sqlx::Error::RowNotFound => Error::ProductNotExists,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
         })?;
 
         Ok(product)
@@ -437,8 +500,11 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
-            tracing::error!(?e);
-            Error::UserNotExists
+            return match e {
+                sqlx::Error::RowNotFound => Error::UserNotExists,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
         })?;
 
         Ok(user)
@@ -454,32 +520,27 @@ impl AppServRepo for SqliteRepo {
         .fetch_one(&self.pool)
         .await
         .map_err(|e| {
-            tracing::error!(?e);
-            Error::ProductNotOpen
+            return match e {
+                sqlx::Error::RowNotFound => Error::ProductNotOpen,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
         })?;
 
         Ok(user_product)
     }
     async fn delete_session(&self, token: &str) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
         if let Err(e) = sqlx::query("delete from session where token = ?")
             .bind(token)
             .execute(&mut *txn)
             .await
         {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -498,34 +559,22 @@ impl AppServRepo for SqliteRepo {
     }
 
     async fn delete_recently(&self, user_id: i64) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
         if let Err(e) = sqlx::query("delete from hiqradio_recently where user_id = ?")
             .bind(user_id)
             .execute(&mut *txn)
             .await
         {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
     async fn new_recently(&self, user_id: i64, recently: &Vec<RecentlyNew>) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
         let mut count: usize = 0;
         for (_, e) in recently.into_iter().enumerate() {
             if let Err(e) = sqlx::query(
@@ -539,28 +588,18 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
             count += 1;
 
             if count >= 50 {
-                txn.commit()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.commit(txn).await?;
 
-                txn = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                txn = self.begin().await?;
             }
         }
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -579,11 +618,7 @@ impl AppServRepo for SqliteRepo {
     }
 
     async fn delete_groups(&self, user_id: i64, groups: &Vec<String>) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         let mut count: usize = 0;
         for (_, e) in groups.into_iter().enumerate() {
@@ -594,37 +629,23 @@ impl AppServRepo for SqliteRepo {
                     .execute(&mut *txn)
                     .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
             count += 1;
 
             if count >= 50 {
-                txn.commit()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.commit(txn).await?;
 
-                txn = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                txn = self.begin().await?;
             }
         }
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
     async fn new_groups(&self, user_id: i64, groups: &Vec<GroupNew>) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         let mut count: usize = 0;
         for (_, e) in groups.into_iter().enumerate() {
@@ -667,36 +688,22 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
             count += 1;
 
             if count >= 50 {
-                txn.commit()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.commit(txn).await?;
 
-                txn = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                txn = self.begin().await?;
             }
         }
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
     async fn modify_group(&self, user_id: i64, old_name: &str, name: &str, desc: &str) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         if let Err(e) = sqlx::query(
             r#"update hiqradio_fav_group set name = ?, desc = ? where name = ? and user_id = ?"#,
@@ -708,15 +715,11 @@ impl AppServRepo for SqliteRepo {
         .execute(&mut *txn)
         .await
         {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -734,11 +737,7 @@ impl AppServRepo for SqliteRepo {
         Ok(groups)
     }
     async fn new_favorite(&self, user_id: i64, stations: &Vec<StationGroup>) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         let mut count: usize = 0;
         for (_, elem) in stations.into_iter().enumerate() {
@@ -753,9 +752,7 @@ impl AppServRepo for SqliteRepo {
             .await;
 
             if let Err(e) = &group {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
             let group = group.unwrap();
@@ -784,28 +781,18 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
             count += 1;
 
             if count >= 50 {
-                txn.commit()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.commit(txn).await?;
 
-                txn = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                txn = self.begin().await?;
             }
         }
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -815,18 +802,13 @@ impl AppServRepo for SqliteRepo {
         favorites: &Option<Vec<String>>,
         group_names: &Option<Vec<String>>,
     ) -> Result {
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        let mut txn = self.begin().await?;
 
         if let Some(favorites) = favorites {
-            let params = format!("?{}", ", ?".repeat(favorites.len() - 1));
             let query_str = format!(
                 r#"delete from hiqradio_favorite  
                 where user_id = ? and stationuuid in ({})"#,
-                params
+                self.build_in_param(favorites)
             );
 
             let mut query = sqlx::query(&query_str);
@@ -836,20 +818,17 @@ impl AppServRepo for SqliteRepo {
                 query = query.bind(param);
             }
             if let Err(e) = query.execute(&mut *txn).await {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
         if let Some(group_names) = group_names {
-            let params = format!("?{}", ", ?".repeat(group_names.len() - 1));
             let query_str = format!(
                 r#"delete from hiqradio_favorite  
                 where user_id = ? and group_id in (
                     select id from hiqradio_fav_group where name in ({})
                 )"#,
-                params
+                self.build_in_param(group_names)
             );
 
             let mut query = sqlx::query(&query_str);
@@ -860,16 +839,12 @@ impl AppServRepo for SqliteRepo {
             }
 
             if let Err(e) = query.execute(&mut *txn).await {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 
@@ -896,12 +871,7 @@ impl AppServRepo for SqliteRepo {
             };
         }
 
-        let mut txn = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
-
+        let mut txn = self.begin().await?;
         if let Err(e) = sqlx::query(
             r#"delete from hiqradio_favorite  
             where user_id = ? and stationuuid = ?"#,
@@ -911,18 +881,15 @@ impl AppServRepo for SqliteRepo {
         .execute(&mut *txn)
         .await
         {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
 
-        let params = format!("?{}", ", ?".repeat(groups.len() - 1));
         let query_str = format!(
             r#"select id, user_id, create_time, name, desc, is_def 
         from hiqradio_fav_group
         where user_id = ? and name in ({})"#,
-            params
+            self.build_in_param(groups)
         );
 
         let mut query = sqlx::query_as::<_, FavGroup>(&query_str);
@@ -933,9 +900,7 @@ impl AppServRepo for SqliteRepo {
         }
         let groups = query.fetch_all(&mut *txn).await;
         if let Err(e) = &groups {
-            txn.rollback()
-                .await
-                .map_err(|e| Error::DatabaseException(e.to_string()))?;
+            self.rollback(txn).await?;
             return Err(Error::DatabaseException(e.to_string()));
         }
         let groups = groups.unwrap();
@@ -951,16 +916,12 @@ impl AppServRepo for SqliteRepo {
             .execute(&mut *txn)
             .await
             {
-                txn.rollback()
-                    .await
-                    .map_err(|e| Error::DatabaseException(e.to_string()))?;
+                self.rollback(txn).await?;
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
 
-        txn.commit()
-            .await
-            .map_err(|e| Error::DatabaseException(e.to_string()))?;
+        self.commit(txn).await?;
         Ok(())
     }
 }
