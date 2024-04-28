@@ -3,7 +3,6 @@ use std::{fs, time::Duration};
 use appserv::{app_router::app_router, app_state::AppState, config::CONFIG};
 use chrono::{Datelike, Days, Local, TimeZone};
 use tokio::{net::TcpListener, signal};
-use tracing::{debug, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -29,9 +28,10 @@ async fn main() {
         loop {
             // 清理过期数据
             if let Err(e) = store.cleanup().await {
+                tracing::info!("clean session");
                 tracing::error!(?e);
             }
-            debug!("store count: {}", store.count().await);
+            tracing::debug!("store count: {}", store.count().await);
 
             // 清理文件
 
@@ -97,8 +97,8 @@ async fn main() {
 
     let app = app_router(state);
 
-    debug!("debug..");
-    info!("listening {} ...", &CONFIG.listen);
+    tracing::debug!("debug..");
+    tracing::info!("listening {} ...", &CONFIG.listen);
     let listener = TcpListener::bind(&CONFIG.listen).await.unwrap();
     axum::serve(listener, app.into_make_service())
         .with_graceful_shutdown(shutdown_signal())

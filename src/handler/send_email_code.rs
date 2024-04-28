@@ -58,8 +58,8 @@ pub async fn send_email_code(
         }
 
         if let Some(time) = session.get::<i64>("time") {
-            let now = Local::now().timestamp();
-            if now - time < 60 {
+            let now = Local::now().timestamp_millis();
+            if now - time < 60 * 1000 {
                 return Err(Error::Frequent);
             }
         }
@@ -87,7 +87,7 @@ pub async fn send_email_code(
         .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
 
     session
-        .insert("time", Local::now().timestamp())
+        .insert("time", Local::now().timestamp_millis())
         .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
 
     tokio::spawn(async move {

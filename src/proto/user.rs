@@ -65,5 +65,19 @@ pub struct UploadRsp {
 pub struct ModifyReq {
     pub user_name: Option<String>,
     pub password: Option<String>,
+    pub new_password: Option<String>,
     pub avatar_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OpenProductReq {
+    pub product: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswdReq {
+    pub email: String,
+    pub passwd: String,
+    pub captcha: String,
+    pub code: String,
 }

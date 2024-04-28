@@ -50,8 +50,10 @@ pub fn app_router(state: AppState) -> Router {
         .route("/signin", post(user::signin))
         .route("/signout", post(user::signout))
         .route("/user_info", post(user::user_info))
+        .route("/reset_passwd", post(user::reset_passwd))
         .route("/upload", post(user::upload))
         .route("/modify", post(user::modify))
+        .route("/open_product", post(user::open_product))
         .route("/user_products", post(user::user_products))
         .route("/products", post(user::products));
 
@@ -59,6 +61,7 @@ pub fn app_router(state: AppState) -> Router {
 
     // hiqradio
     let router_hiqradio = Router::new()
+        .route("/sync", post(hiqradio::sync))
         .route("/recently", post(hiqradio::recently))
         .route("/recently_new", post(hiqradio::recently_new))
         .route("/recently_clear", post(hiqradio::recently_clear))

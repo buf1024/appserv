@@ -21,3 +21,9 @@ pub use upload::upload;
 
 mod modify;
 pub use modify::modify;
+
+mod open_product;
+pub use open_product::open_product;
+
+mod reset_passwd;
+pub use reset_passwd::reset_passwd;

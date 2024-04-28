@@ -6,4 +6,5 @@ pub struct Favorite {
     pub user_id: i64,
     pub stationuuid: String,
     pub group_id: i64,
+    pub create_time: i64,
 }

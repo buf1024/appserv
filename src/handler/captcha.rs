@@ -34,33 +34,10 @@ pub async fn captcha(
     }
 
     let (captcha, chars) = {
-        // let mut rng = thread_rng();
-        // let difficulty = rng.gen_range(0..3);
-        // let difficulty = match difficulty {
-        //     0 => Difficulty::Easy,
-        //     1 => Difficulty::Medium,
-        //     2 => Difficulty::Hard,
-        //     _ => unreachable!(),
-        // };
-
-        // let name = rng.gen_range(0..3);
-        // let name = match name {
-        //     0 => CaptchaName::Amelia,
-        //     1 => CaptchaName::Lucy,
-        //     2 => CaptchaName::Mila,
-        //     _ => unreachable!(),
-        // };
-        // let difficulty = Difficulty::Easy;
-        // let name = CaptchaName::Mila;
-
-        // let captcha = by_name(difficulty, name);
         let mut captcha = Captcha::new();
         captcha.add_chars(4);
         captcha.apply_filter(Noise::new(0.3));
-        // captcha.apply_filter(Wave::new(1.0, 10.0).horizontal());
-        // captcha.apply_filter(Wave::new(1.0, 10.0).vertical());
         captcha.view(120, 52);
-        // captcha.apply_filter(Dots::new(15));
         let chars = captcha.chars_as_string();
         tracing::info!("captcha: {}", &chars);
         let captcha = captcha

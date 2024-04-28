@@ -2,8 +2,6 @@ use std::fs;
 
 use async_trait::async_trait;
 use chrono::Local;
-use data_encoding::HEXLOWER;
-use ring::digest::{Context, SHA256};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, Transaction};
 
 use crate::{
@@ -16,7 +14,8 @@ use crate::{
         user::{User, USER_STATUS_NORMAL},
         user_product::UserProduct,
     },
-    proto::{GroupNew, RecentlyNew, SignInReq, SignUpReq},
+    proto::{GroupNew, RecentlyNew, ResetPasswdReq, SignInReq, SignUpReq},
+    util::gen_passwd,
     Result,
 };
 
@@ -53,7 +52,7 @@ impl SqliteRepo {
             email: signup.email.clone(),
             passwd,
             status: String::from(USER_STATUS_NORMAL),
-            update_time: Local::now().timestamp(),
+            update_time: Local::now().timestamp_millis(),
         }
     }
 
@@ -117,7 +116,7 @@ impl AppServRepo for SqliteRepo {
         Ok(())
     }
     async fn clean_session(&self) -> Result {
-        let now = Local::now().timestamp();
+        let now = Local::now().timestamp_millis();
         let session: Vec<_> = sqlx::query_as::<_, Session>(
             r#"select id, token, user_id, product_id, expire 
             from session 
@@ -182,15 +181,7 @@ impl AppServRepo for SqliteRepo {
         .ok_or(Error::ProductNotExists)?;
 
         let mut txn = self.begin().await?;
-        let passwd = {
-            let mut context = Context::new(&SHA256);
-            let mut data = String::new();
-            data.push_str(&signup.email);
-            data.push_str(&signup.passwd);
-            context.update(data.as_bytes());
-            let digest = context.finish();
-            HEXLOWER.encode(digest.as_ref())
-        };
+        let passwd = gen_passwd(&signup.email, &signup.passwd);
         let user = self.user_from_signup(signup, passwd);
 
         if let Err(e) = sqlx::query(
@@ -252,15 +243,7 @@ impl AppServRepo for SqliteRepo {
             };
         })?;
 
-        let passwd = {
-            let mut context = Context::new(&SHA256);
-            let mut data = String::new();
-            data.push_str(&signin.email);
-            data.push_str(&signin.passwd);
-            context.update(data.as_bytes());
-            let digest = context.finish();
-            HEXLOWER.encode(digest.as_ref())
-        };
+        let passwd = gen_passwd(&user.email, &signin.passwd);
         if passwd != user.passwd {
             return Err(Error::UserPasswdError);
         }
@@ -334,6 +317,80 @@ impl AppServRepo for SqliteRepo {
         Ok((user, product, token))
     }
 
+    async fn reset_user_passwd(&self, reset: &ResetPasswdReq) -> Result {
+        let user = sqlx::query_as::<_, User>(
+            r#"select id, user_name, email, passwd, status, update_time
+            from user where email = ?"#,
+        )
+        .bind(&reset.email)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| {
+            return match e {
+                sqlx::Error::RowNotFound => Error::UserNotExists,
+
+                _ => Error::DatabaseException(e.to_string()),
+            };
+        })?;
+
+        let passwd = gen_passwd(&user.email, &reset.passwd);
+
+        let mut txn = self.begin().await?;
+
+        sqlx::query(
+            "update user set passwd = ?, update_time = unixepoch(current_timestamp) where id = ?",
+        )
+        .bind(&passwd)
+        .bind(user.id.unwrap())
+        .execute(&mut *txn)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        self.commit(txn).await?;
+
+        Ok(())
+    }
+    async fn open_product(&self, user_id: i64, product: &str) -> Result {
+        let products = self.query_user_products(user_id).await?;
+
+        let open_products: Vec<_> = products
+            .into_iter()
+            .filter(|p| p.product == product)
+            .collect();
+
+        if open_products.is_empty() {
+            let mut txn = self.begin().await?;
+
+            let product = sqlx::query_as::<_, Product>(
+                r#"select id, product, desc, status, update_time
+                    from product 
+                    where status = '00' and product = ?"#,
+            )
+            .bind(product)
+            .fetch_one(&mut *txn)
+            .await
+            .map_err(|e| {
+                return match e {
+                    sqlx::Error::RowNotFound => Error::ProductNotExists,
+
+                    _ => Error::DatabaseException(e.to_string()),
+                };
+            })?;
+
+            sqlx::query(
+                    "insert into user_product(`user_id`, `product_id`, `status`, `update_time`) values (?, ?, '00', unixepoch(current_timestamp))",
+                )
+                .bind(user_id)
+                .bind(product.id.unwrap())
+                .execute(&mut *txn).await.map_err(|e| {
+                    Error::DatabaseException(e.to_string())
+                })?;
+
+            self.commit(txn).await?;
+        }
+        Ok(())
+    }
+
     async fn get_session(&self, token: &str) -> Result<Session> {
         let mut session = sqlx::query_as::<_, Session>(
             r#"select id, token, user_id, product_id, expire 
@@ -356,7 +413,7 @@ impl AppServRepo for SqliteRepo {
 
             let mut txn = self.begin().await?;
 
-            let now = Local::now().timestamp();
+            let now = Local::now().timestamp_millis();
 
             if session.expire < now {
                 if let Err(e) = sqlx::query("delete from session where token = ?")
@@ -367,8 +424,8 @@ impl AppServRepo for SqliteRepo {
                     self.rollback(txn).await?;
                     return Err(Error::DatabaseException(e.to_string()));
                 }
-            } else if session.expire - now < CONFIG.token_refresh {
-                let expire = now + CONFIG.token_expire;
+            } else if session.expire - now < CONFIG.token_refresh * 1000 {
+                let expire = now + CONFIG.token_expire * 1000;
                 if let Err(e) = sqlx::query("update session set expire = ? where token = ?")
                     .bind(expire)
                     .bind(&session.token)
@@ -397,7 +454,7 @@ impl AppServRepo for SqliteRepo {
         user_id: i64,
         product_id: i64,
         user_name: Option<String>,
-        passwd: Option<String>,
+        new_passwd: Option<String>,
         avatar: Option<String>,
     ) -> Result {
         let mut txn = self.begin().await?;
@@ -413,8 +470,8 @@ impl AppServRepo for SqliteRepo {
                 return Err(Error::DatabaseException(e.to_string()));
             }
         }
-        if let Some(new_passwd) = passwd {
-            if let Err(e) = sqlx::query("update user set user_name = ? where id = ?")
+        if let Some(new_passwd) = new_passwd {
+            if let Err(e) = sqlx::query("update user set passwd = ? where id = ?")
                 .bind(&new_passwd)
                 .bind(user_id)
                 .execute(&mut *txn)
@@ -688,16 +745,29 @@ impl AppServRepo for SqliteRepo {
             }
 
             if e.is_def > 0 {
-                if let Ok(_) = sqlx::query_as::<_, FavGroup>(
+                if let Ok(fg) = sqlx::query_as::<_, FavGroup>(
                     r#"select id, user_id, create_time, name, desc, is_def 
                     from hiqradio_fav_group
-                    where user_id = ? and is_def = 0"#,
+                    where user_id = ? and is_def = 1"#,
                 )
                 .bind(user_id)
                 .fetch_one(&mut *txn)
                 .await
                 {
-                    continue;
+                    if fg.create_time > e.create_time {
+                        continue;
+                    }
+
+                    if let Err(e) = sqlx::query(
+                        r#"delete from hiqradio_fav_group where user_id = ? and is_def = 1"#,
+                    )
+                    .bind(user_id)
+                    .execute(&mut *txn)
+                    .await
+                    {
+                        self.rollback(txn).await?;
+                        return Err(Error::DatabaseException(e.to_string()));
+                    }
                 }
             }
 
@@ -750,7 +820,7 @@ impl AppServRepo for SqliteRepo {
 
     async fn query_favorites(&self, user_id: i64) -> Result<Vec<StationGroup>> {
         let groups = sqlx::query_as::<_, StationGroup>(
-            r#"select a.name as group_name,  b.stationuuid
+            r#"select a.name as group_name,  b.stationuuid, b.create_time
             from hiqradio_fav_group a, hiqradio_favorite b
             where a.id = b.group_id and a.user_id = b.user_id and a.user_id = ?"#,
         )
@@ -783,7 +853,7 @@ impl AppServRepo for SqliteRepo {
             let group = group.unwrap();
 
             if let Ok(_) = sqlx::query_as::<_, Favorite>(
-                r#"select id, user_id, stationuuid, group_id 
+                r#"select id, user_id, stationuuid, group_id, create_time
                 from hiqradio_favorite
                 where user_id = ? and group_id = ? and stationuuid = ?"#,
             )
@@ -797,12 +867,13 @@ impl AppServRepo for SqliteRepo {
             }
 
             if let Err(e) = sqlx::query(
-                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id) 
-                values(?, ?, ?)"#,
+                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id, create_time) 
+                values(?, ?, ?, ?)"#,
             )
             .bind(user_id)
             .bind(&elem.stationuuid)
             .bind(group.id.unwrap())
+            .bind(elem.create_time)
             .execute(&mut *txn)
             .await
             {
@@ -880,7 +951,7 @@ impl AppServRepo for SqliteRepo {
         groups: &Vec<String>,
     ) -> Result {
         if let Err(e) = sqlx::query_as::<_, Favorite>(
-            r#"select id, user_id, stationuuid, group_id
+            r#"select id, user_id, stationuuid, group_id, create_time
             from hiqradio_favorite 
             where user_id = ? and stationuuid = ?"#,
         )
@@ -932,8 +1003,8 @@ impl AppServRepo for SqliteRepo {
 
         for e in groups {
             if let Err(e) = sqlx::query(
-                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id) 
-                values(?, ?, ?)"#,
+                r#"insert into hiqradio_favorite(user_id, stationuuid, group_id, create_time) 
+                values(?, ?, ?, unixepoch(current_timestamp))"#,
             )
             .bind(user_id)
             .bind(stationuuid)
@@ -948,5 +1019,46 @@ impl AppServRepo for SqliteRepo {
 
         self.commit(txn).await?;
         Ok(())
+    }
+
+    async fn query_sync(
+        &self,
+        user_id: i64,
+        start_time: i64,
+    ) -> Result<(Vec<FavGroup>, Vec<Recently>, Vec<StationGroup>)> {
+        let fav_groups = sqlx::query_as::<_, FavGroup>(
+            r#"select id, user_id, create_time, name, desc, is_def 
+            from hiqradio_fav_group
+            where user_id = ? and create_time >= ?"#,
+        )
+        .bind(user_id)
+        .bind(start_time)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        let recently = sqlx::query_as::<_, Recently>(
+            r#"select id, user_id, stationuuid, start_time, end_time 
+            from hiqradio_recently
+            where user_id = ? and start_time >= ?  order by start_time desc"#,
+        )
+        .bind(user_id)
+        .bind(start_time)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        let stations = sqlx::query_as::<_, StationGroup>(
+            r#"select a.name as group_name,  b.stationuuid, b.create_time
+            from hiqradio_fav_group a, hiqradio_favorite b
+            where a.id = b.group_id and a.user_id = b.user_id and a.user_id = ? and b.create_time >= ?"#,
+        )
+        .bind(user_id)
+        .bind(start_time)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| Error::DatabaseException(e.to_string()))?;
+
+        Ok((fav_groups, recently, stations))
     }
 }

@@ -30,3 +30,6 @@ pub use favorite_delete::favorite_delete;
 
 mod favorite_modify;
 pub use favorite_modify::favorite_modify;
+
+mod sync;
+pub use sync::sync;

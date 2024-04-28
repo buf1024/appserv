@@ -34,15 +34,20 @@ pub async fn user_info(State(_): State<AppState>, auth_user: AuthUser) -> JsonRe
             avatar = Some(base64);
         }
     }
-    let rsp = UserInfoRsp {
+    let mut rsp = UserInfoRsp {
         error: E_SUCCESS,
         message: "success".into(),
         user_name: user.user_name,
         email: user.email,
-        avatar,
+        avatar: None,
         product: product.product,
         product_desc: product.desc,
     };
 
-    ok_with_trace(rsp)
+    tracing::info!("\nrsp: {:?}\n", rsp);
+
+    rsp.avatar = avatar;
+
+    Ok(Json(rsp))
+    // ok_with_trace(rsp)
 }

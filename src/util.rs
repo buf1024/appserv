@@ -1,7 +1,9 @@
+use data_encoding::HEXLOWER;
 use lettre::{
     message::header::ContentType, transport::smtp::authentication::Credentials, Message,
     SmtpTransport, Transport,
 };
+use ring::digest::{Context, SHA256};
 
 use crate::{config::CONFIG, errors::Error, Result};
 
@@ -45,4 +47,14 @@ pub fn send_email(receiver: String, subject: String, body: String) -> Result {
             Err(Error::Custom("send email error".to_string()))
         }
     }
+}
+
+pub fn gen_passwd(email: &str, passwd: &str) -> String {
+    let mut context = Context::new(&SHA256);
+    let mut data = String::new();
+    data.push_str(email);
+    data.push_str(passwd);
+    context.update(data.as_bytes());
+    let digest = context.finish();
+    HEXLOWER.encode(digest.as_ref())
 }

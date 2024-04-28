@@ -31,9 +31,11 @@ pub async fn upload(
         })?;
 
         let file_ext: Vec<_> = file_name.split(".").collect();
-        let mut ext = String::from(".");
-        if file_ext.len() == 2 {
-            ext.push_str(*file_ext.last().unwrap());
+
+        let mut ext = String::from("");
+        if let Some(f_ext) = file_ext.last() {
+            ext.push_str(".");
+            ext.push_str(*&f_ext);
         }
         let alphabet: [char; 16] = [
             '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', 'a', 'b', 'c', 'd', 'e', 'f',

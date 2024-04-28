@@ -4,4 +4,5 @@ use serde::{Deserialize, Serialize};
 pub struct StationGroup {
     pub group_name: String,
     pub stationuuid: String,
+    pub create_time: i64,
 }

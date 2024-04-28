@@ -67,7 +67,8 @@ create table hiqradio_favorite (
     `id` integer primary key autoincrement,
     `user_id` integer not null,
     `stationuuid` varchar(40) not null,
-    `group_id` integer not null
+    `group_id` integer not null,
+    `create_time` integer not null
 );
 
 insert into

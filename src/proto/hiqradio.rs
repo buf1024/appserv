@@ -82,3 +82,17 @@ pub struct FavoriteModifyReq {
     pub stationuuid: String,
     pub group_names: Vec<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct SyncReq {
+    pub start_time: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SyncRsp {
+    pub error: usize,
+    pub message: String,
+    pub groups: Vec<FavGroup>,
+    pub recently: Vec<Recently>,
+    pub favorites: Vec<StationGroup>,
+}

@@ -14,7 +14,7 @@ use crate::{
         user::User,
         user_product::UserProduct,
     },
-    proto::{GroupNew, RecentlyNew, SignInReq, SignUpReq},
+    proto::{GroupNew, RecentlyNew, ResetPasswdReq, SignInReq, SignUpReq},
     Result,
 };
 
@@ -29,6 +29,7 @@ pub trait AppServRepo {
     // service
     async fn create_user(&self, signup: &SignUpReq) -> Result<User>;
     async fn signin_user(&self, signin: &SignInReq) -> Result<(User, Product, Session)>;
+    async fn reset_user_passwd(&self, signin: &ResetPasswdReq) -> Result;
     async fn get_session(&self, token: &str) -> Result<Session>;
     async fn update_user_info(
         &self,
@@ -38,6 +39,8 @@ pub trait AppServRepo {
         passwd: Option<String>,
         avatar: Option<String>,
     ) -> Result;
+
+    async fn open_product(&self, user_id: i64, product: &str) -> Result;
 
     // dao
     async fn query_user_products(&self, user_id: i64) -> Result<Vec<Product>>;
@@ -71,6 +74,11 @@ pub trait AppServRepo {
         stationuuid: &str,
         groups: &Vec<String>,
     ) -> Result;
+    async fn query_sync(
+        &self,
+        user_id: i64,
+        start_time: i64,
+    ) -> Result<(Vec<FavGroup>, Vec<Recently>, Vec<StationGroup>)>;
 }
 
 pub type DynAppServRepo = Arc<dyn AppServRepo + Send + Sync>;
