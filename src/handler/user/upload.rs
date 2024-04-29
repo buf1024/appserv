@@ -24,10 +24,10 @@ pub async fn upload(
     while let Some(field) = multipart.next_field().await.unwrap() {
         let file_name = field
             .file_name()
-            .ok_or(Error::Custom(String::from("fail to get file name")))?
+            .ok_or(Error::Internal(String::from("fail to get file name")))?
             .to_string();
         let data = field.bytes().await.map_err(|e| {
-            Error::Custom(format!("fail to get file name, error: {}", e.to_string()))
+            Error::Internal(format!("fail to get file name, error: {}", e.to_string()))
         })?;
 
         let file_ext: Vec<_> = file_name.split(".").collect();
@@ -47,7 +47,7 @@ pub async fn upload(
         let path = Path::new(&path_str);
 
         fs::write(path, data).map_err(|e| {
-            Error::Custom(format!(
+            Error::Internal(format!(
                 "fail to write file: {}, error: {}",
                 path_str,
                 e.to_string()

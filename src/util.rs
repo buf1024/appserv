@@ -10,7 +10,7 @@ use crate::{config::CONFIG, errors::Error, Result};
 pub fn send_email(receiver: String, subject: String, body: String) -> Result {
     if CONFIG.smtp_host.is_none() || CONFIG.smtp_passwd.is_none() || CONFIG.smtp_sender.is_none() {
         tracing::error!("smtp configuration error");
-        return Err(Error::Custom("smtp configuration error".to_string()));
+        return Err(Error::Internal("smtp configuration error".to_string()));
     }
     let sender_email = CONFIG.smtp_sender.clone().unwrap();
     let name = sender_email.split("@").nth(0).unwrap().to_string();
@@ -20,20 +20,20 @@ pub fn send_email(receiver: String, subject: String, body: String) -> Result {
         .from(
             sender
                 .parse()
-                .map_err(|e| Error::Custom(format!("email sender format error: {e}")))?,
+                .map_err(|e| Error::Internal(format!("email sender format error: {e}")))?,
         )
         .to(receiver
             .parse()
-            .map_err(|e| Error::Custom(format!("email sender format error: {e}")))?)
+            .map_err(|e| Error::Internal(format!("email sender format error: {e}")))?)
         .subject(subject)
         .header(ContentType::TEXT_HTML)
         .body(body)
-        .map_err(|e| Error::Custom(format!("build email body error: {e}")))?;
+        .map_err(|e| Error::Internal(format!("build email body error: {e}")))?;
 
     let credentials = Credentials::new(sender_email, CONFIG.smtp_passwd.clone().unwrap());
 
     let mailer = SmtpTransport::relay(CONFIG.smtp_host.clone().unwrap().as_str())
-        .map_err(|e| Error::Custom(format!("connect smtp server error: {e}")))?
+        .map_err(|e| Error::Internal(format!("connect smtp server error: {e}")))?
         .credentials(credentials)
         .build();
 
@@ -44,7 +44,7 @@ pub fn send_email(receiver: String, subject: String, body: String) -> Result {
         }
         Err(e) => {
             tracing::error!("send email error: {e}");
-            Err(Error::Custom("send email error".to_string()))
+            Err(Error::SendEmail)
         }
     }
 }

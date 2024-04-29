@@ -21,7 +21,7 @@ pub async fn modify(
     let mut new_pass = None;
     if let Some(password) = &payload.new_password {
         if password.len() < 6 {
-            return Err(Error::UserPassword);
+            return Err(Error::UserPasswordTooShort);
         }
         if payload.password.is_none() {
             return Err(Error::UserPasswdError);

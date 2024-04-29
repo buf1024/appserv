@@ -36,11 +36,14 @@ where
         let TypedHeader(Authorization(bearer)) = parts
             .extract::<TypedHeader<Authorization<Bearer>>>()
             .await
-            .map_err(|_| Error::TokenInvalid)?;
+            .map_err(|e|{ 
+                tracing::error!("{}", e);
+                Error::TokenInvalid})?;
 
         let state = AppState::from_ref(state);
 
-        let session = state.repo.get_session(bearer.token()).await?;
+        let token = bearer.token();
+        let session = state.repo.get_session(token).await?;
 
         let product = state.repo.query_product(session.product_id).await?;
         let user = state.repo.query_user(session.user_id).await?;

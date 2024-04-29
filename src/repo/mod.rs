@@ -54,6 +54,7 @@ pub trait AppServRepo {
     async fn query_recently(&self, user_id: i64) -> Result<Vec<Recently>>;
     async fn delete_recently(&self, user_id: i64) -> Result;
     async fn new_recently(&self, user_id: i64, recently: &Vec<RecentlyNew>) -> Result;
+    async fn modify_recently(&self, user_id: i64, stationuuid: &str, start_time: i64, end_time: i64) -> Result;
 
     async fn query_groups(&self, user_id: i64) -> Result<Vec<FavGroup>>;
     async fn delete_groups(&self, user_id: i64, groups: &Vec<String>) -> Result;
@@ -93,7 +94,7 @@ pub async fn new(url: &str) -> Result<DynAppServRepo> {
         let repo = SqliteRepo::new(url).await?;
         return Ok(Arc::new(repo));
     }
-    Err(errors::Error::Custom(format!(
+    Err(errors::Error::Internal(format!(
         "url schema repo \"{}\" not implement",
         url
     )))

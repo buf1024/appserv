@@ -23,7 +23,7 @@
 //             .max_connections(10)
 //             .connect(url)
 //             .await
-//             .map_err(|e| Error::Custom(format!("connecting to mysql error: {}", e)))?;
+//             .map_err(|e| Error::DatabaseException(format!("connecting to mysql error: {}", e)))?;
 //         Ok(Self { pool })
 //     }
 

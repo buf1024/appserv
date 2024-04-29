@@ -21,6 +21,12 @@ pub struct RecentlyNew {
 pub struct RecentlyNewReq {
     pub new_recently: Vec<RecentlyNew>,
 }
+#[derive(Debug, Deserialize)]
+pub struct RecentlyModifyReq {
+    pub stationuuid: String,
+    pub start_time: i64,
+    pub end_time: i64,
+}
 
 #[derive(Debug, Deserialize)]
 pub struct GroupsReq {

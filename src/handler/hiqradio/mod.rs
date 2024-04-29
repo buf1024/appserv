@@ -7,6 +7,9 @@ pub use recently_clear::recently_clear;
 mod recently_new;
 pub use recently_new::recently_new;
 
+mod recently_modify;
+pub use recently_modify::recently_modify;
+
 mod groups;
 pub use groups::groups;
 

@@ -28,12 +28,18 @@ pub async fn user_info(State(_): State<AppState>, auth_user: AuthUser) -> JsonRe
         let path = Path::new(&path);
         if path.exists() && path.is_file() {
             let data = fs::read(path)
-                .map_err(|e| Error::Custom(format!("read file error: {}", e.to_string())))?;
+                .map_err(|e| Error::Internal(format!("read file error: {}", e.to_string())))?;
 
             let base64 = BASE64_STANDARD.encode(data);
             avatar = Some(base64);
         }
     }
+    if avatar.is_some() {
+        tracing::info!("avatar is some");
+    } else {
+        tracing::info!("avatar is none");
+    }
+
     let mut rsp = UserInfoRsp {
         error: E_SUCCESS,
         message: "success".into(),

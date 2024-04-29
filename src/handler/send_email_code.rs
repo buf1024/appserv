@@ -36,22 +36,22 @@ pub async fn send_email_code(
             .and_then(|cap| cap.name("name").map(|name| name.as_str()))
             .is_none()
         {
-            return Err(Error::Parse(String::from("email format is not correct.")));
+            return Err(Error::ParseEmail);
         }
         let cookie = cookies
             .get(COOKIE_NAME)
-            .ok_or(Error::Custom(format!("cookie not found in session")))?;
+            .ok_or(Error::Captcha)?;
 
         let session = state
             .store
             .load_session(cookie.to_string())
             .await
-            .map_err(|e| Error::Custom(format!("session not found: {}", e)))?
-            .ok_or(Error::Custom(format!("session not found")))?;
+            .map_err(|_| Error::Captcha)?
+            .ok_or(Error::Captcha)?;
 
         let captcha: String = session
             .get("captcha")
-            .ok_or(Error::Custom(format!("captcha not found")))?;
+            .ok_or(Error::Captcha)?;
 
         if captcha.to_lowercase() != payload.captcha.to_lowercase() {
             return Err(Error::Captcha);
@@ -80,15 +80,15 @@ pub async fn send_email_code(
 
     session
         .insert("code", code.clone())
-        .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
+        .map_err(|e| Error::Internal(format!("new session error: {}", e)))?;
 
     session
         .insert("email", payload.email.clone())
-        .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
+        .map_err(|e| Error::Internal(format!("new session error: {}", e)))?;
 
     session
         .insert("time", Local::now().timestamp_millis())
-        .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
+        .map_err(|e| Error::Internal(format!("new session error: {}", e)))?;
 
     tokio::spawn(async move {
         let subject = "验证码/Verify code".to_string();

@@ -33,7 +33,7 @@ impl SqliteRepo {
             .connect(url)
             .await
             .map_err(|e| {
-                Error::Custom(format!("connecting to sqlite: path={} error={}", url, e))
+                Error::DatabaseException(format!("connecting to sqlite: path={} error={}", url, e))
             })?;
         Ok(Self { pool })
     }
@@ -107,7 +107,7 @@ impl AppServRepo for SqliteRepo {
                     let path = format!("{}/{}", &CONFIG.avatar_path, path);
                     tracing::info!("remove unused avatar: {}", &path);
                     fs::remove_file(path)
-                        .map_err(|e| Error::Custom(format!("remove file error: {}", e)))?;
+                        .map_err(|e| Error::Internal(format!("remove file error: {}", e)))?;
                 }
 
                 _ => (),
@@ -660,6 +660,32 @@ impl AppServRepo for SqliteRepo {
         Ok(())
     }
 
+    async fn modify_recently(
+        &self,
+        user_id: i64,
+        stationuuid: &str,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result {
+        let mut txn = self.begin().await?;
+        if let Err(e) = sqlx::query(
+                r#"update hiqradio_recently set end_time = ? where stationuuid = ? and start_time = ? and user_id = ?"#,
+            )
+            .bind(end_time)
+            .bind(stationuuid)
+            .bind(start_time)
+            .bind(user_id)
+            .execute(&mut *txn)
+            .await
+            {
+                self.rollback(txn).await?;
+                return Err(Error::DatabaseException(e.to_string()));
+            }
+
+        self.commit(txn).await?;
+        Ok(())
+    }
+
     async fn query_groups(&self, user_id: i64) -> Result<Vec<FavGroup>> {
         let groups = sqlx::query_as::<_, FavGroup>(
             r#"select id, user_id, create_time, name, desc, is_def 
@@ -961,7 +987,7 @@ impl AppServRepo for SqliteRepo {
         .await
         {
             return match e {
-                sqlx::Error::RowNotFound => Err(Error::Custom(format!("station not found",))),
+                sqlx::Error::RowNotFound => Err(Error::DatabaseException(format!("station not found",))),
 
                 _ => Err(Error::DatabaseException(e.to_string())),
             };

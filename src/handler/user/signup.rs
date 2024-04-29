@@ -32,63 +32,62 @@ pub async fn signup(
         let re: Regex = Regex::new(r"(?x)^(?P<name>[^@\s]+)@([[:word:]]+\.)*[[:word:]]+$").unwrap();
         re.captures(&payload.email)
             .and_then(|cap| cap.name("name").map(|name| name.as_str()))
-            .ok_or(Error::Parse(String::from("email format is not correct.")))?;
+            .ok_or(Error::ParseEmail)?;
 
         if payload.passwd.len() < 6 {
-            return Err(Error::UserPassword);
+            return Err(Error::UserPasswordTooShort);
         }
 
-        let cookie = cookies
-            .get(COOKIE_NAME)
-            .ok_or(Error::Custom(format!("cookie not found in session")))?;
+        let cookie = cookies.get(COOKIE_NAME).ok_or(Error::Captcha)?;
 
         let session = state
             .store
             .load_session(cookie.to_string())
             .await
-            .map_err(|e| Error::Custom(format!("session not found: {}", e)))?
-            .ok_or(Error::Custom(format!("session not found")))?;
+            .map_err(|_| Error::Captcha)?
+            .ok_or(Error::Captcha)?;
 
-        let captcha: String = session
-            .get("captcha")
-            .ok_or(Error::Custom(format!("captcha not found")))?;
+        let captcha: String = session.get("captcha").ok_or(Error::Captcha)?;
 
-        let code: String = session
-            .get("code")
-            .ok_or(Error::Custom(format!("code not found")))?;
+        let code: String = session.get("code").ok_or(Error::Captcha)?;
 
-        let email: String = session
-            .get("email")
-            .ok_or(Error::Custom(format!("email not found")))?;
+        let email: String = session.get("email").ok_or(Error::Captcha)?;
 
         if captcha.to_lowercase() != payload.captcha.to_lowercase() {
             return Err(Error::Captcha);
         }
 
         if code.to_lowercase() != payload.code.to_lowercase() {
-            return Err(Error::Code);
+            return Err(Error::EmailVerifyCode);
         }
 
         if email != payload.email {
-            return Err(Error::Email);
+            return Err(Error::EmailDiff);
         }
 
         state
             .store
             .destroy_session(session)
             .await
-            .map_err(|e| Error::Custom(format!("destroy session error: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("destroy session error: {}", e)))?;
     }
 
     let user = state.repo.create_user(&payload).await?;
     tracing::info!("new create user: {:?}", &user);
-
     {
+        let user_products = state.repo.query_user_products(user.id.unwrap()).await?;
+
+        let mut products = String::new();
+        for product in user_products {
+            let tmp = format!("<li>{}</li>", product.product);
+            products.push_str(tmp.as_str());
+        }
+        products = format!("<ul>{}</ul>", products);
         tokio::spawn(async move {
             let subject = "注册成功/Signup Success".to_string();
             let body = format!(
-                "<h5>账户注册成功，感谢使用!<h5><div>当前已经注册产品:</div><br><h5>Signup Success, Thank you for interest!<h5>",
-            );
+                "<h5>账户注册成功，感谢使用!<h5><div>当前已经注册产品: </div><div>{}</div><br><h5>Signup Success, Thank you for interest!<h5>",
+            products);
             util::send_email(user.email, subject, body)
         });
     }

@@ -1,5 +1,5 @@
 db_url = "sqlite://appserv.db"
-listen = "127.0.0.1:4000"
+listen = "0.0.0.0:4000"
 
 avatar_path = "./avatar"
 # 5s过期会话清理

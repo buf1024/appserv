@@ -36,7 +36,7 @@ pub async fn signin(
             .load_session(cookie.to_string())
             .await
             .map_err(|_| Error::Captcha)?
-            .ok_or(Error::Custom(format!("session not found")))?;
+            .ok_or(Error::Captcha)?;
 
         let captcha: String = session.get("captcha").ok_or(Error::Captcha)?;
 
@@ -48,7 +48,7 @@ pub async fn signin(
             .store
             .destroy_session(session)
             .await
-            .map_err(|e| Error::Custom(format!("destroy session error: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("destroy session error: {}", e)))?;
     }
 
     let (user, product, session) = state.repo.signin_user(&payload).await?;

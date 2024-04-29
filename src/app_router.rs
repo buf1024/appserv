@@ -46,6 +46,7 @@ pub fn app_router(state: AppState) -> Router {
 
     // user
     let router_user = Router::new()
+        .route("/is_login", post(user::is_login))
         .route("/signup", post(user::signup))
         .route("/signin", post(user::signin))
         .route("/signout", post(user::signout))
@@ -64,6 +65,7 @@ pub fn app_router(state: AppState) -> Router {
         .route("/sync", post(hiqradio::sync))
         .route("/recently", post(hiqradio::recently))
         .route("/recently_new", post(hiqradio::recently_new))
+        .route("/recently_modify", post(hiqradio::recently_modify))
         .route("/recently_clear", post(hiqradio::recently_clear))
         .route("/groups", post(hiqradio::groups))
         .route("/group_delete", post(hiqradio::group_delete))

@@ -42,7 +42,7 @@ pub async fn captcha(
         tracing::info!("captcha: {}", &chars);
         let captcha = captcha
             .as_base64()
-            .ok_or(Error::Custom(String::from("fail to generate captcha")))?;
+            .ok_or(Error::Internal(String::from("fail to generate captcha")))?;
 
         (captcha, chars)
     };
@@ -51,14 +51,14 @@ pub async fn captcha(
     session.expire_in(Duration::from_secs(60 * 5));
     session
         .insert("captcha", chars)
-        .map_err(|e| Error::Custom(format!("new session error: {}", e)))?;
+        .map_err(|e| Error::Internal(format!("new session error: {}", e)))?;
 
     let cookie = state
         .store
         .store_session(session)
         .await
-        .map_err(|e| Error::Custom(format!("store session error: {}", e)))?
-        .ok_or(Error::Custom(format!("store session error")))?;
+        .map_err(|e| Error::Internal(format!("store session error: {}", e)))?
+        .ok_or(Error::Internal(format!("store session error")))?;
 
     let resp = CaptchaRsp {
         error: E_SUCCESS,
@@ -73,7 +73,7 @@ pub async fn captcha(
         SET_COOKIE,
         cookie
             .parse()
-            .map_err(|e| Error::Custom(format!("failed to set header: {}", e)))?,
+            .map_err(|e| Error::Internal(format!("failed to set header: {}", e)))?,
     );
 
     Ok((headers, Json(resp)))

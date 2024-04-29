@@ -1,32 +1,35 @@
+use axum::{debug_handler, extract::State, Json};
+use axum_extra::extract::WithRejection;
+
 use crate::{
     app_state::AppState,
     auth_user::AuthUser,
     errors::E_SUCCESS,
     handler::ok_with_trace,
-    proto::{SyncReq, SyncRsp},
+    proto::{BaseRsp, RecentlyModifyReq},
     JsonRejection, JsonResult,
 };
-use axum::{debug_handler, extract::State, Json};
-use axum_extra::extract::WithRejection;
 #[debug_handler(state = AppState)]
-pub async fn sync(
+pub async fn recently_modify(
     State(state): State<AppState>,
     auth_user: AuthUser,
-    WithRejection(Json(payload), _): JsonRejection<SyncReq>,
-) -> JsonResult<SyncRsp> {
+    WithRejection(Json(payload), _): JsonRejection<RecentlyModifyReq>,
+) -> JsonResult<BaseRsp> {
     tracing::info!("\nreq: {:?}\n", &payload);
-    let user_product = auth_user.user_product;
-    let (groups, recently, favorites) = state
-        .repo
-        .query_sync(user_product.user_id, payload.start_time)
-        .await?;
 
-    let rsp = SyncRsp {
+    let user_product = auth_user.user_product;
+    state
+        .repo
+        .modify_recently(
+            user_product.user_id,
+            &payload.stationuuid,
+            payload.start_time,
+            payload.end_time,
+        )
+        .await?;
+    let rsp = BaseRsp {
         error: E_SUCCESS,
         message: "success".into(),
-        groups,
-        recently,
-        favorites,
     };
 
     ok_with_trace(rsp)

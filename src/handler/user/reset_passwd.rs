@@ -30,44 +30,44 @@ pub async fn reset_passwd(
 
         let cookie = cookies
             .get(COOKIE_NAME)
-            .ok_or(Error::Custom(format!("cookie not found in session")))?;
+            .ok_or(Error::Captcha)?;
 
         let session = state
             .store
             .load_session(cookie.to_string())
             .await
-            .map_err(|e| Error::Custom(format!("session not found: {}", e)))?
-            .ok_or(Error::Custom(format!("session not found")))?;
+            .map_err(|_| Error::Captcha)?
+            .ok_or(Error::Captcha)?;
 
         let captcha: String = session
             .get("captcha")
-            .ok_or(Error::Custom(format!("captcha not found")))?;
+            .ok_or(Error::Captcha)?;
 
         let code: String = session
             .get("code")
-            .ok_or(Error::Custom(format!("code not found")))?;
+            .ok_or(Error::Captcha)?;
 
         let email: String = session
             .get("email")
-            .ok_or(Error::Custom(format!("email not found")))?;
+            .ok_or(Error::Captcha)?;
 
         if captcha.to_lowercase() != payload.captcha.to_lowercase() {
             return Err(Error::Captcha);
         }
 
         if code.to_lowercase() != payload.code.to_lowercase() {
-            return Err(Error::Code);
+            return Err(Error::EmailVerifyCode);
         }
 
         if email != payload.email {
-            return Err(Error::Email);
+            return Err(Error::EmailDiff);
         }
 
         state
             .store
             .destroy_session(session)
             .await
-            .map_err(|e| Error::Custom(format!("destroy session error: {}", e)))?;
+            .map_err(|e| Error::Internal(format!("destroy session error: {}", e)))?;
     }
 
     state.repo.reset_user_passwd(&payload).await?;
