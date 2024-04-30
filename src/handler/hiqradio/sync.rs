@@ -18,7 +18,7 @@ pub async fn sync(
     let user_product = auth_user.user_product;
     let (groups, recently, favorites) = state
         .repo
-        .query_sync(user_product.user_id, payload.start_time)
+        .query_sync(user_product.user_id, -1)
         .await?;
 
     let rsp = SyncRsp {
