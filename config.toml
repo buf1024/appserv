@@ -1,3 +1,5 @@
+log_path = "./logs"
+
 db_url = "sqlite://appserv.db"
 listen = "0.0.0.0:4000"
 

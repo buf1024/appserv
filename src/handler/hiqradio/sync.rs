@@ -12,7 +12,7 @@ use axum_extra::extract::WithRejection;
 pub async fn sync(
     State(state): State<AppState>,
     auth_user: AuthUser,
-    WithRejection(Json(payload), _): JsonRejection<SyncReq>,
+    WithRejection(Json(payload) , _): JsonRejection<SyncReq>,
 ) -> JsonResult<SyncRsp> {
     tracing::info!("\nreq: {:?}\n", &payload);
     let user_product = auth_user.user_product;

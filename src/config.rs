@@ -7,6 +7,7 @@ pub static CONFIG: Lazy<Config> = Lazy::new(Config::load_config);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    pub log_path: String,
     pub avatar_path: String,
     pub token_expire: i64,
     pub token_refresh: i64,
@@ -30,8 +31,9 @@ impl Default for Config {
             smtp_host: None,
             smtp_passwd: None,
             avatar_path: String::from("./avatar"),
-            token_expire: 1296000, // 15天过期
-            token_refresh: 3600,   // 1小时
+            token_expire: 1296000,            // 15天过期
+            token_refresh: 3600,              // 1小时
+            log_path: String::from("./logs"), // 1小时
         }
     }
 }
