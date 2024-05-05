@@ -2,7 +2,12 @@ use axum::{debug_handler, extract::State, Json};
 use axum_extra::extract::WithRejection;
 
 use crate::{
-    app_state::AppState, auth_user::AuthUser, errors::E_SUCCESS, handler::ok_with_trace, proto::{BaseRsp, FavoriteDeleteReq}, JsonRejection, JsonResult
+    app_state::AppState,
+    auth_user::AuthUser,
+    errors::{Error, E_SUCCESS},
+    handler::ok_with_trace,
+    proto::{BaseRsp, FavoriteDeleteReq},
+    JsonRejection, JsonResult,
 };
 #[debug_handler(state = AppState)]
 pub async fn favorite_delete(
@@ -11,6 +16,12 @@ pub async fn favorite_delete(
     WithRejection(Json(payload), _): JsonRejection<FavoriteDeleteReq>,
 ) -> JsonResult<BaseRsp> {
     tracing::info!("\nreq: {:?}\n", &payload);
+
+    if payload.favorites.is_none() && payload.group_names.is_none() {
+        return Err(Error::Parse(String::from(
+            "favorites or group is both none, please check",
+        )));
+    }
 
     let user_product = auth_user.user_product;
     state

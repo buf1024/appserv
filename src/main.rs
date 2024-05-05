@@ -18,8 +18,12 @@ async fn main() {
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
-        .with(tracing_subscriber::fmt::layer())
         .with(file_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_ansi(true)
+                .with_writer(std::io::stderr),
+        )
         .init();
 
     let state = AppState::new().await;
@@ -108,7 +112,7 @@ async fn main() {
     tracing::info!("listening {} ...", &CONFIG.listen);
     let listener = TcpListener::bind(&CONFIG.listen).await.unwrap();
     axum::serve(listener, app.into_make_service())
-        .with_graceful_shutdown(shutdown_signal())
+        // .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
 }
