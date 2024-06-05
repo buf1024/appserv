@@ -18,9 +18,9 @@ create table if not exists user (
     `update_time` integer null
 );
 
-create index idx_user_name on user(`user_name`);
+create index if not exists idx_user_name on user(`user_name`);
 
-create index idx_user_email on user(`email`);
+create index if not exists idx_user_email on user(`email`);
 
 create table if not exists product (
     `id` integer not null primary key autoincrement,
@@ -31,7 +31,7 @@ create table if not exists product (
     `update_time` integer null
 );
 
-create index idx_product on product(`product`);
+create index if not exists idx_product on product(`product`);
 
 create table if not exists user_product (
     `id` integer not null primary key autoincrement,
@@ -43,7 +43,7 @@ create table if not exists user_product (
     `update_time` integer not null
 );
 
-create index idx_user_product on user_product(`product_id`, `user_id`);
+create index if not exists idx_user_product on user_product(`product_id`, `user_id`);
 
 -- hiqradio
 create table if not exists hiqradio_recently (
@@ -63,7 +63,7 @@ create table if not exists hiqradio_fav_group (
     `is_def` integer not null
 );
 
-create table hiqradio_favorite (
+create table if not exists hiqradio_favorite (
     `id` integer primary key autoincrement,
     `user_id` integer not null,
     `stationuuid` varchar(40) not null,
@@ -73,10 +73,17 @@ create table hiqradio_favorite (
 
 insert into
     product(`product`, `desc`, `status`, `update_time`)
-values
-    (
-        'hiqradio',
-        'hiqradio listen the whole world',
-        '00',
-        unixepoch(current_timestamp)
+select
+    'hiqradio',
+    'hiqradio listen the whole world',
+    '00',
+    unixepoch(current_timestamp)
+where
+    not exists (
+        select
+            1
+        from
+            product
+        where
+            product = 'hiqradio'
     );

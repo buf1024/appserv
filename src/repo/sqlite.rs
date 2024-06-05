@@ -2,6 +2,7 @@ use std::fs;
 
 use async_trait::async_trait;
 use chrono::Local;
+use sqlx::Executor;
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite, Transaction};
 
 use crate::{
@@ -28,9 +29,17 @@ pub struct SqliteRepo {
 
 impl SqliteRepo {
     pub async fn new(url: &str) -> Result<Self> {
+        let new_url = format!("{}?mode=rwc", url);
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
-            .connect(url)
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    let tables = include_str!("../../tables/sqlite.sql");
+                    conn.execute(tables).await?;
+                    Ok(())
+                })
+            })
+            .connect(&new_url)
             .await
             .map_err(|e| {
                 Error::DatabaseException(format!("connecting to sqlite: path={} error={}", url, e))
@@ -987,7 +996,9 @@ impl AppServRepo for SqliteRepo {
         .await
         {
             return match e {
-                sqlx::Error::RowNotFound => Err(Error::DatabaseException(format!("station not found",))),
+                sqlx::Error::RowNotFound => {
+                    Err(Error::DatabaseException(format!("station not found",)))
+                }
 
                 _ => Err(Error::DatabaseException(e.to_string())),
             };
